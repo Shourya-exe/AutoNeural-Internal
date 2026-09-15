@@ -1,0 +1,29 @@
+node_modules/
+.next/
+.env*
+!.env.example
+!.env.production.example
+data/
+*.tsbuildinfo
+coverage/
+dist/
+uploads/
+tmp/
+*.zip
+.claude/
+.parknow-build/
+.parknow-loop-update/
+.ushika-build/
+.DS_Store
+
+# Live tenant/user configuration and credentials
+config/*.json
+!config/*.example.json
+*service-account*.json
+voice-agent/.venv/
+__pycache__/
+# Archived application and private initial CRM credentials
+archives/
+output/CRM-INITIAL-LOGINS.txt
+output/e2e-*/
+

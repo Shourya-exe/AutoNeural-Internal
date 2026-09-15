@@ -1,0 +1,289 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  COMPLETED
+  CANCELLED
+}
+
+enum AttachmentType {
+  FILE
+  DOCUMENT
+  LINK
+}
+
+enum AttachmentPurpose {
+  REFERENCE
+  OUTPUT
+  FOR_APPROVAL
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ActivityAction {
+  CREATED
+  ASSIGNED
+  REASSIGNED
+  UPDATED
+  STATUS_CHANGED
+  PROGRESS_CHANGED
+  COMMENT_ADDED
+  ATTACHMENT_ADDED
+  ATTACHMENT_REMOVED
+  SUBMISSION_FOR_APPROVAL
+  SUBMISSION_APPROVED
+  SUBMISSION_REJECTED
+}
+
+enum RemovalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_REASSIGNED
+  TASK_UPDATED
+  STATUS_CHANGED
+  PROGRESS_UPDATED
+  TASK_COMPLETED
+  DUE_DATE_APPROACHING
+  REMOVAL_REQUESTED
+  REMOVAL_APPROVED
+  REMOVAL_REJECTED
+  ATTACHMENT_ADDED
+  SUBMISSION_FOR_APPROVAL
+  SUBMISSION_APPROVED
+  SUBMISSION_REJECTED
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users           User[]
+  tasks           Task[]
+  removalRequests EmployeeRemovalRequest[]
+
+  @@map("organizations")
+}
+
+model User {
+  id                 String        @id @default(uuid())
+  organizationId     String
+  organization       Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email              String
+  passwordHash       String
+  name               String
+  role               Role          @default(EMPLOYEE)
+  status             AccountStatus @default(ACTIVE)
+  department         String?
+  jobTitle           String?
+  avatarUrl          String?
+  mustChangePassword Boolean       @default(false)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  createdTasks            Task[]                   @relation("TaskCreator")
+  assignments             TaskAssignment[]
+  activities              TaskActivity[]
+  comments                Comment[]
+  notifications           Notification[]
+  refreshTokens           RefreshToken[]
+  targetedRemovalRequests EmployeeRemovalRequest[] @relation("TargetEmployee")
+  createdRemovalRequests  EmployeeRemovalRequest[] @relation("RemovalRequester")
+  reviewedRemovalRequests EmployeeRemovalRequest[] @relation("RemovalReviewer")
+  taskAttachments         TaskAttachment[]
+
+  @@unique([organizationId, email])
+  @@index([email])
+  @@index([organizationId, role])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Task {
+  id             String       @id @default(uuid())
+  number         Int          @default(autoincrement())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdById    String
+  createdBy      User         @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  title          String
+  description    String       @default("")
+  priority       TaskPriority @default(MEDIUM)
+  status         TaskStatus   @default(TODO)
+  progress       Int          @default(0)
+  project        String?
+  startDate      DateTime?
+  dueDate        DateTime?
+  completedAt    DateTime?
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  assignments TaskAssignment[]
+  activities  TaskActivity[]
+  comments    Comment[]
+  attachments TaskAttachment[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, priority])
+  @@index([organizationId, dueDate])
+  @@map("tasks")
+}
+
+model TaskAssignment {
+  id         String   @id @default(uuid())
+  taskId     String
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   User     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  @@unique([taskId, employeeId])
+  @@index([employeeId])
+  @@index([taskId])
+  @@map("task_assignments")
+}
+
+model TaskActivity {
+  id            String         @id @default(uuid())
+  taskId        String
+  task          Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action        ActivityAction
+  previousValue String?
+  newValue      String?
+  comment       String?
+  createdAt     DateTime       @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([userId])
+  @@map("task_activities")
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId, createdAt])
+  @@index([authorId])
+  @@map("comments")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId    String?
+  type      NotificationType
+  title     String
+  message   String
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model EmployeeRemovalRequest {
+  id             String               @id @default(uuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       User                 @relation("TargetEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
+  requestedById  String
+  requestedBy    User                 @relation("RemovalRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  reviewedById   String?
+  reviewedBy     User?                @relation("RemovalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  status         RemovalRequestStatus @default(PENDING)
+  reason         String?
+  reviewNote     String?
+  createdAt      DateTime             @default(now())
+  reviewedAt     DateTime?
+
+  @@index([organizationId, status])
+  @@index([employeeId])
+  @@map("employee_removal_requests")
+}
+
+model TaskAttachment {
+  id             String            @id @default(uuid())
+  taskId         String
+  task           Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploaderId     String
+  uploader       User              @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+  name           String
+  type           AttachmentType
+  url            String
+  storagePath    String?
+  fileSize       Int?
+  mimeType       String?
+  purpose        AttachmentPurpose @default(OUTPUT)
+  approvalStatus ApprovalStatus?
+  reviewNote     String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([taskId])
+  @@index([uploaderId])
+  @@map("task_attachments")
+}
+

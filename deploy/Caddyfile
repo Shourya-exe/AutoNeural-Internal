@@ -1,0 +1,22 @@
+# ==============================================================================
+# AutoNeural Caddy Configuration
+# Automatic Let's Encrypt HTTPS Reverse Proxy for Hostinger Cloud VPS
+# ==============================================================================
+
+{$APP_DOMAIN:crm.autoneural.in} {
+	encode gzip zstd
+
+	# Allow file & document uploads up to 50MB
+	request_body {
+		max_size 50MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
+	reverse_proxy app:3000
+}

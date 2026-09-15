@@ -1,0 +1,42 @@
+# ==============================================================================
+# AutoNeural Production Docker Compose Stack for Hostinger Cloud VPS
+# Serves application with automatic Let's Encrypt SSL on https://<subdomain>.autoneural.in
+#
+# Usage:
+#   docker compose up -d --build
+# ==============================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - CRM_APP_URL=https://${APP_DOMAIN:-crm.autoneural.in}
+      - CRM_DATABASE_PATH=/app/data/autoneural-crm.sqlite
+    volumes:
+      - app_data:/app/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - APP_DOMAIN=${APP_DOMAIN:-crm.autoneural.in}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:

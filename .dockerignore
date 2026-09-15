@@ -1,0 +1,13 @@
+node_modules
+.next
+.env
+.env.*
+data
+*.tsbuildinfo
+.git
+.claude
+secrets
+*service-account*.json
+config/tenants.json
+config/users.json
+voice-agent
