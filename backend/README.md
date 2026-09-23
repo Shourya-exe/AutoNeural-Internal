@@ -87,10 +87,7 @@ All accounts are seeded with the default password: **`Password123!`**
 | Role | Name | Email | Department / Designation |
 |---|---|---|---|
 | **Admin** | AutoNeural Admin | `info@autoneural.in` | Management / System Administrator |
-| **Admin** | Shourya | `shourya@autoneural.in` | Engineering / **Technical Lead** |
-| **Employee** | Manyu | `manyu@autoneural.in` | Engineering / Backend Engineer |
-| **Employee** | Rajashi | `rajashi@autoneural.in` | Product Design / UI/UX Designer |
-| **Employee** | Warrior Biswas | `warriorbiswas@autoneural.in` | Operations / Operations Lead |
+| **Admin** | Shourya Kumar | `shourya@autoneural.in` | Engineering / **Technical Lead** |
 
 ---
 

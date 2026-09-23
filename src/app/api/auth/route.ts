@@ -10,6 +10,15 @@ import {
   sameOrigin,
 } from "@/lib/http";
 export const runtime = "nodejs";
+function getClientContext(req: Request) {
+  const forwarded = req.headers.get("x-forwarded-for");
+  const ip = forwarded
+    ? forwarded.split(",")[0].trim()
+    : req.headers.get("x-real-ip") || "127.0.0.1";
+  const userAgent = req.headers.get("user-agent") || undefined;
+  return { ip, userAgent };
+}
+
 export async function POST(req: Request) {
   try {
     sameOrigin(req);
@@ -19,7 +28,7 @@ export async function POST(req: Request) {
         password: z.string().min(1).max(200),
       })
       .parse(await body(req));
-    const result = login(p.email, p.password);
+    const result = login(p.email, p.password, getClientContext(req));
     (await cookies()).set(cookieName, result.token, cookieOptions(req));
     return Response.json({ user: result.user });
   } catch (e) {
@@ -37,7 +46,7 @@ export async function PATCH(req: Request) {
       })
       .parse(await body(req));
     changePassword(user, p.current, p.password);
-    const result = login(user.email, p.password);
+    const result = login(user.email, p.password, getClientContext(req));
     (await cookies()).set(cookieName, result.token, cookieOptions(req));
     return Response.json({ user: result.user });
   } catch (e) {
@@ -49,7 +58,7 @@ export async function DELETE(req: Request) {
     sameOrigin(req);
     const jar = await cookies();
     const token = jar.get(cookieName)?.value;
-    if (token) logout(token);
+    if (token) logout(token, getClientContext(req));
     jar.set(cookieName, "", { ...cookieOptions(req), maxAge: 0 });
     return Response.json({ ok: true });
   } catch (e) {

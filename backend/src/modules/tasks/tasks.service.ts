@@ -3,10 +3,12 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivitiesService } from '../activities/activities.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { EmailService } from '../email/email.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { AssignTaskDto } from './dto/assign-task.dto';
@@ -37,6 +39,7 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly activitiesService: ActivitiesService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly emailService?: EmailService,
   ) {}
 
   async create(
@@ -132,6 +135,7 @@ export class TasksService {
         newValue: `Assigned to ${assigneeNames}`,
       });
 
+      const creator = await this.prisma.user.findUnique({ where: { id: createdById } });
       for (const assignment of task.assignments) {
         await this.notificationsService.create({
           userId: assignment.employeeId,
@@ -140,6 +144,21 @@ export class TasksService {
           title: 'New Task Assigned',
           message: `You were assigned task "${task.title}" by ${creatorName}.`,
         });
+
+        if (this.emailService && assignment.employee?.email && creator?.email) {
+          void this.emailService.notifyTaskAssigned({
+            taskId: task.id,
+            taskTitle: task.title,
+            priority: task.priority,
+            dueDate: task.dueDate ? task.dueDate.toISOString().slice(0, 10) : undefined,
+            project: task.project,
+            description: task.description,
+            employeeName: assignment.employee.name,
+            employeeEmail: assignment.employee.email,
+            adminName: creator.name,
+            adminEmail: creator.email,
+          });
+        }
       }
     }
 
@@ -472,6 +491,7 @@ export class TasksService {
     });
 
     // Notify newly assigned employees
+    const admin = await this.prisma.user.findUnique({ where: { id: adminId } });
     for (const emp of activeEmployees) {
       await this.notificationsService.create({
         userId: emp.id,
@@ -480,6 +500,21 @@ export class TasksService {
         title: 'Task Assignment Updated',
         message: `You were assigned to task "${task.title}" by ${adminName}.`,
       });
+
+      if (this.emailService && emp.email && admin?.email) {
+        void this.emailService.notifyTaskAssigned({
+          taskId: task.id,
+          taskTitle: task.title,
+          priority: task.priority,
+          dueDate: task.dueDate ? task.dueDate.toISOString().slice(0, 10) : undefined,
+          project: task.project,
+          description: task.description,
+          employeeName: emp.name,
+          employeeEmail: emp.email,
+          adminName: admin.name,
+          adminEmail: admin.email,
+        });
+      }
     }
 
     return this.findOne(organizationId, taskId, adminId, Role.ADMIN);
@@ -551,6 +586,24 @@ export class TasksService {
         title: 'Task Status Changed',
         message: `${userName} changed status of task "${task.title}" to ${dto.status}.`,
       });
+
+      if (dto.status === TaskStatus.COMPLETED && this.emailService) {
+        const [adminUser, employeeUser] = await Promise.all([
+          this.prisma.user.findUnique({ where: { id: task.createdById } }),
+          this.prisma.user.findUnique({ where: { id: userId } }),
+        ]);
+        if (adminUser?.email && employeeUser?.email) {
+          void this.emailService.notifyTaskCompleted({
+            taskId: task.id,
+            taskTitle: task.title,
+            project: task.project,
+            employeeName: employeeUser.name,
+            employeeEmail: employeeUser.email,
+            adminName: adminUser.name,
+            adminEmail: adminUser.email,
+          });
+        }
+      }
     } else {
       // Admin changed status: notify assignees
       for (const a of task.assignments) {

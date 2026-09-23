@@ -2,12 +2,14 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
 import { ActivitiesService } from '../activities/activities.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { EmailService } from '../email/email.service';
 import { ActivityAction, NotificationType, Role } from '@prisma/client';
 
 @Injectable()
@@ -16,6 +18,7 @@ export class CommentsService {
     private readonly prisma: PrismaService,
     private readonly activitiesService: ActivitiesService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly emailService?: EmailService,
   ) {}
 
   async create(
@@ -77,6 +80,21 @@ export class CommentsService {
         title: 'New Comment on Task',
         message: `${authorName} commented on task "${task.title}": "${dto.content.trim().slice(0, 60)}..."`,
       });
+
+      if (this.emailService) {
+        const adminUser = await this.prisma.user.findUnique({ where: { id: task.createdById } });
+        if (adminUser?.email && comment.author?.email) {
+          void this.emailService.notifyCommentAdded({
+            taskId: task.id,
+            taskTitle: task.title,
+            authorName: comment.author.name,
+            authorEmail: comment.author.email,
+            commentText: dto.content.trim(),
+            recipientEmail: adminUser.email,
+            recipientName: adminUser.name,
+          });
+        }
+      }
     } else {
       // Notify all assignees
       for (const assignment of task.assignments) {

@@ -52,33 +52,14 @@ async function main() {
   });
   console.log(`Admin created: ${admin.email}`);
 
-  // 4. Create Employees
+  // 4. Create Employees / Additional Admins
   const employeeData = [
     {
-      name: 'Manyu',
-      email: 'manyu@autoneural.in',
-      department: 'Engineering',
-      jobTitle: 'Backend Engineer',
-    },
-    {
-      name: 'Rajashi',
-      email: 'rajashi@autoneural.in',
-      department: 'Product Design',
-      jobTitle: 'UI/UX Designer',
-    },
-    {
-      name: 'Shourya',
+      name: 'Shourya Kumar',
       email: 'shourya@autoneural.in',
-      department: 'Product Management',
+      department: 'Engineering',
       jobTitle: 'Technical Lead',
       role: Role.ADMIN,
-    },
-    {
-      name: 'Warrior Biswas',
-      email: 'warriorbiswas@autoneural.in',
-      department: 'Operations',
-      jobTitle: 'Operations Lead',
-      role: Role.EMPLOYEE,
     },
   ];
 
@@ -93,7 +74,10 @@ async function main() {
         },
       },
       update: {
+        name: emp.name,
         role: emp.role || Role.EMPLOYEE,
+        jobTitle: emp.jobTitle,
+        department: emp.department,
       },
       create: {
         organizationId: org.id,
@@ -120,7 +104,7 @@ async function main() {
       status: TaskStatus.IN_PROGRESS,
       progress: 45,
       project: 'Core Platform',
-      assignee: employees['Rajashi'],
+      assignee: employees['Shourya Kumar'],
       dueDate: new Date(Date.now() + 5 * 86400000),
     },
     {
@@ -130,18 +114,8 @@ async function main() {
       status: TaskStatus.IN_PROGRESS,
       progress: 70,
       project: 'Security',
-      assignee: employees['Manyu'],
+      assignee: employees['Shourya Kumar'],
       dueDate: new Date(Date.now() + 2 * 86400000),
-    },
-    {
-      title: 'Audit client onboarding checklist and operational SOPs',
-      description: 'Review SLA adherence and operational bottlenecks for enterprise tier.',
-      priority: TaskPriority.MEDIUM,
-      status: TaskStatus.TODO,
-      progress: 0,
-      project: 'Operations',
-      assignee: employees['Warrior Biswas'],
-      dueDate: new Date(Date.now() + 7 * 86400000),
     },
     {
       title: 'Draft Q4 Product Roadmap & Milestone Specs',
@@ -150,7 +124,7 @@ async function main() {
       status: TaskStatus.COMPLETED,
       progress: 100,
       project: 'Product',
-      assignee: employees['Shourya'],
+      assignee: employees['Shourya Kumar'],
       dueDate: new Date(Date.now() - 1 * 86400000),
       completedAt: new Date(Date.now() - 1 * 86400000),
     },
@@ -224,9 +198,7 @@ async function main() {
   console.log('----------------------------------------------------');
   console.log('Default credentials for all accounts:');
   console.log('Password: Password123!');
-  console.log('Admin:    info@autoneural.in');
-  console.log('Employees: manyu@autoneural.in, rajashi@autoneural.in,');
-  console.log('           shourya@autoneural.in, warriorbiswas@autoneural.in');
+  console.log('Admins:   info@autoneural.in, shourya@autoneural.in');
   console.log('----------------------------------------------------');
 }
 

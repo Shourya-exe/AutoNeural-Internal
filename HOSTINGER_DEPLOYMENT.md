@@ -23,9 +23,10 @@ Both deployment models on Hostinger Cloud are supported:
 ## Quickest Option: Direct ZIP Upload via Hostinger File Manager
 
 We have pre-built and packaged the complete production application and backend into:
-- 📁 **[`autoneural-work-deployment.zip`](file:///c:/Users/tvpkg/Downloads/N8N/N8N/autoneural-work-deployment.zip)** (Fullstack App + Embedded Backend, configured for **`https://work.autoneural.in`**)
-- 📁 **[`autoneural-hostinger-deployment.zip`](file:///c:/Users/tvpkg/Downloads/N8N/N8N/autoneural-hostinger-deployment.zip)** (Universal bundle)
-- 📁 **[`autoneural-backend-deployment.zip`](file:///c:/Users/tvpkg/Downloads/N8N/N8N/autoneural-backend-deployment.zip)** (Dedicated NestJS Enterprise API bundle)
+- 📁 **[`autoneural-work-deployment.zip`](file:///c:/Users/Home/Shourya/professional/AutoNeural-Internal/AutoNeural-Internal/autoneural-work-deployment.zip)** (Fullstack App + Embedded Backend, configured for **`https://work.autoneural.in`**)
+- 📁 **[`autoneural-crm-deployment.zip`](file:///c:/Users/Home/Shourya/professional/AutoNeural-Internal/AutoNeural-Internal/autoneural-crm-deployment.zip)** (Configured for **`https://crm.autoneural.in`**)
+- 📁 **[`autoneural-hostinger-deployment.zip`](file:///c:/Users/Home/Shourya/professional/AutoNeural-Internal/AutoNeural-Internal/autoneural-hostinger-deployment.zip)** (Universal bundle)
+- 📁 **[`autoneural-backend-deployment.zip`](file:///c:/Users/Home/Shourya/professional/AutoNeural-Internal/AutoNeural-Internal/autoneural-backend-deployment.zip)** (Dedicated NestJS Enterprise API bundle)
 
 ### What is Included in `autoneural-work-deployment.zip`:
 1. **Fullstack Production App**: Complete Next.js standalone runner (`server.js`, `passenger.js`, `.htaccess`).
@@ -209,10 +210,27 @@ In Hostinger DNS Zone Editor for `autoneural.in`:
 
 | Variable | Description | Example |
 | :--- | :--- | :--- |
-| `CRM_APP_URL` | Canonical URL of the web application | `https://crm.autoneural.in` |
+| `CRM_APP_URL` | Canonical URL of the web application | `https://work.autoneural.in` |
 | `CRM_DATABASE_PATH` | Path to the SQLite database file | `data/autoneural-crm.sqlite` |
-| `APP_DOMAIN` | Domain used by Caddy for SSL certificates | `crm.autoneural.in` |
+| `APP_DOMAIN` | Domain used by Caddy for SSL certificates | `work.autoneural.in` |
 | `NODE_ENV` | Runtime environment | `production` |
+| `SMTP_HOST` | Hostinger outgoing mail server | `smtp.hostinger.com` |
+| `SMTP_PORT` | Hostinger SSL port | `465` |
+| `SMTP_USER` | Full Hostinger email address | `info@autoneural.in` |
+| `SMTP_PASS` | Password of Hostinger email account | `your_hostinger_password` |
+| `SMTP_FROM_EMAIL` | Sender name and address | `AutoNeural Workspace <info@autoneural.in>` |
+
+---
+
+## Production Database Safety on Upgrades
+
+> [!IMPORTANT]
+> **Your Live Production Database Is Preserved Across Upgrades:**
+> When packaging an update via `npm run package:work` or `npm run package:crm`, the packaging script **excludes** the local database file `data/autoneural-crm.sqlite` by default.
+> 
+> Therefore, extracting an update ZIP in Hostinger File Manager will **never overwrite** your live production database (`data/autoneural-crm.sqlite`), and all employees, tasks, attachments, and comments created in production remain completely intact.
+> 
+> **Optional Safety Tip**: Before extracting any new zip in Hostinger File Manager, you can right-click `data/autoneural-crm.sqlite` and download a quick backup copy to your computer.
 
 ---
 

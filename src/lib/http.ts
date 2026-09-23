@@ -88,16 +88,19 @@ export async function body(req: Request) {
   }
 }
 export function failure(e: unknown) {
-  if (e instanceof AppError)
-    return Response.json({ error: e.message }, { status: e.status });
-  if (e instanceof ZodError)
+  const status = (e as any)?.status;
+  if (typeof status === "number" && status >= 400 && status < 600) {
+    return Response.json({ error: (e as any).message || "Request failed." }, { status });
+  }
+  if (e instanceof ZodError || (e as any)?.name === "ZodError") {
     return Response.json(
-      { error: e.issues[0]?.message || "Check the supplied fields." },
+      { error: (e as any).issues?.[0]?.message || "Check the supplied fields." },
       { status: 400 },
     );
+  }
   console.error("CRM request failed", e);
   return Response.json(
-    { error: "Something went wrong. Please try again." },
+    { error: (e as Error)?.message || "Something went wrong. Please try again." },
     { status: 500 },
   );
 }

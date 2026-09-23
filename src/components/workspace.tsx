@@ -41,6 +41,15 @@ import {
   Trash2,
   Paperclip,
   Upload,
+  ShieldCheck,
+  Download,
+  LogIn,
+  Mail,
+  Send,
+  Inbox,
+  Reply,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   statuses,
@@ -51,6 +60,8 @@ import {
   type Activity,
   type TaskAttachment,
   type Status,
+  type AuthLog,
+  type EmailMessage,
 } from "@/lib/types";
 const initials = (name: string) =>
   name
@@ -254,6 +265,245 @@ function PasswordForm({
     </div>
   );
 }
+
+function EmailSettingsCard({
+  status,
+  adminEmail,
+  notify,
+}: {
+  status?: WorkspaceData["emailStatus"];
+  adminEmail: string;
+  notify: (msg: string) => void;
+}) {
+  const [testEmail, setTestEmail] = useState(adminEmail);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleSendTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testEmail) return;
+    setSending(true);
+    setResult(null);
+    try {
+      const res = await request("/api/workspace", {
+        action: "testEmail",
+        email: testEmail,
+      });
+      if (res.success) {
+        setResult({
+          success: true,
+          message: `Test email sent successfully via ${status?.provider?.toUpperCase() || "provider"}!`,
+        });
+        notify("Test email dispatched.");
+      } else {
+        setResult({
+          success: false,
+          message: res.error || "Failed to send test email.",
+        });
+      }
+    } catch (err: any) {
+      setResult({
+        success: false,
+        message: err?.message || "Failed to send test email.",
+      });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <section className="panel settings-card" style={{ gridColumn: "1 / -1", marginTop: "10px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
+        <div>
+          <span className="eyebrow">AUTOMATION &amp; INTEGRATIONS</span>
+          <h2 style={{ fontSize: "16px", marginTop: "4px", marginBottom: "4px" }}>Email Notifications</h2>
+          <p style={{ margin: 0, fontSize: "12px", color: "var(--muted)" }}>
+            Real-time transactional emails via Resend or EmailJS.
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span
+            className="status"
+            style={{
+              background: status?.configured ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
+              color: status?.configured ? "#10b981" : "#f59e0b",
+              border: `1px solid ${status?.configured ? "rgba(16, 185, 129, 0.3)" : "rgba(245, 158, 11, 0.3)"}`,
+              fontSize: "11px",
+              padding: "4px 8px",
+              borderRadius: "6px",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
+            <i style={{ background: status?.configured ? "#10b981" : "#f59e0b", width: "6px", height: "6px", borderRadius: "50%", display: "inline-block" }} />
+            {status?.provider === "smtp"
+              ? "Hostinger SMTP Active"
+              : status?.provider === "resend"
+                ? "Resend Active"
+                : status?.provider === "emailjs"
+                  ? "EmailJS Active"
+                  : "Simulation Mode (Console Logs)"}
+          </span>
+        </div>
+      </div>
+
+      {!status?.configured && (
+        <div
+          style={{
+            background: "#fffbeb",
+            border: "1px solid #fde68a",
+            borderRadius: "8px",
+            padding: "12px 16px",
+            marginBottom: "16px",
+            fontSize: "12px",
+            color: "#92400e",
+          }}
+        >
+          <strong style={{ display: "block", marginBottom: "4px" }}>
+            Hostinger Mail Configuration Guide:
+          </strong>
+          <span>
+            Emails are currently being generated and tracked inside your CRM Inbox and Sent box. To also deliver real emails to your <strong>Hostinger Webmail</strong> (or external email clients), add your Hostinger email password to <code>.env.local</code>:
+          </span>
+          <pre
+            style={{
+              background: "#ffffff",
+              border: "1px solid #fcd34d",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              fontSize: "11px",
+              marginTop: "8px",
+              color: "#1e293b",
+              fontFamily: "monospace",
+            }}
+          >
+{`SMTP_HOST="smtp.hostinger.com"
+SMTP_PORT=465
+SMTP_USER="info@autoneural.in"
+SMTP_PASS="your_hostinger_email_password"
+SMTP_FROM_EMAIL="AutoNeural Workspace <info@autoneural.in>"`}
+          </pre>
+          <small style={{ display: "block", marginTop: "6px", color: "#78350f" }}>
+            Tip: Restart the development server after saving <code>.env.local</code> to activate live delivery.
+          </small>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginBottom: "20px" }}>
+        <div style={{ background: "var(--panel-alt, #f8faf5)", border: "1px solid var(--line)", borderRadius: "8px", padding: "14px" }}>
+          <strong style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>1. Task Assignment</strong>
+          <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: 1.5 }}>
+            When an admin assigns/reassigns a task, an email is automatically sent to the employee with task details, priority, and direct workspace link.
+          </p>
+          <small style={{ display: "block", marginTop: "6px", fontSize: "10px", color: "var(--ink)" }}>
+            Reply-To: Assigning Admin
+          </small>
+        </div>
+
+        <div style={{ background: "var(--panel-alt, #f8faf5)", border: "1px solid var(--line)", borderRadius: "8px", padding: "14px" }}>
+          <strong style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>2. Task Completed</strong>
+          <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: 1.5 }}>
+            When an employee marks a task done, the admin receives an email with the completion timestamp and review link.
+          </p>
+          <small style={{ display: "block", marginTop: "6px", fontSize: "10px", color: "var(--ink)" }}>
+            Reply-To: Employee's Email
+          </small>
+        </div>
+
+        <div style={{ background: "var(--panel-alt, #f8faf5)", border: "1px solid var(--line)", borderRadius: "8px", padding: "14px" }}>
+          <strong style={{ display: "block", fontSize: "12px", marginBottom: "4px" }}>3. Task Comments</strong>
+          <p style={{ margin: 0, fontSize: "11px", color: "var(--muted)", lineHeight: 1.5 }}>
+            When an employee posts a comment on a task, the admin receives an email with the comment text.
+          </p>
+          <small style={{ display: "block", marginTop: "6px", fontSize: "10px", color: "var(--ink)" }}>
+            Reply-To: Commenting User
+          </small>
+        </div>
+      </div>
+
+      <div style={{ borderTop: "1px solid var(--line)", paddingTop: "16px" }}>
+        <form onSubmit={handleSendTest} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px" }}>
+          <label style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "8px", margin: 0 }}>
+            <span>Send test notification to:</span>
+            <input
+              type="email"
+              value={testEmail}
+              onChange={(e) => setTestEmail(e.target.value)}
+              placeholder="admin@autoneural.in"
+              required
+              style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--line)", fontSize: "12px", minWidth: "220px" }}
+            />
+          </label>
+          <button
+            type="submit"
+            className="button secondary"
+            disabled={sending}
+            style={{ padding: "6px 14px", fontSize: "12px" }}
+          >
+            {sending ? "Sending..." : "Send Test Email"}
+          </button>
+        </form>
+        {result && (
+          <p
+            style={{
+              margin: "10px 0 0",
+              fontSize: "11px",
+              color: result.success ? "#16a34a" : "#dc2626",
+            }}
+          >
+            {result.message}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function downloadAuthLogsCsv(logs: AuthLog[]) {
+  const headers = [
+    "Log ID",
+    "Timestamp (UTC)",
+    "Date (IST)",
+    "Time (IST)",
+    "Name",
+    "Email",
+    "Role",
+    "Action",
+    "IP Address",
+    "Device / User Agent",
+  ];
+  const rows = logs.map((l) => {
+    const d = new Date(l.timestamp);
+    const dateStr = d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+    const timeStr = d.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" });
+    return [
+      l.id,
+      l.timestamp,
+      dateStr,
+      timeStr,
+      `"${(l.name || "").replace(/"/g, '""')}"`,
+      l.email,
+      l.role,
+      l.action,
+      l.ip || "127.0.0.1",
+      `"${(l.userAgent || "").replace(/"/g, '""')}"`,
+    ].join(",");
+  });
+  const csvContent =
+    "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute(
+    "download",
+    `autoneural-login-audit-logs-${new Date().toISOString().slice(0, 10)}.csv`,
+  );
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
 export default function Workspace({ initialUser }: { initialUser: User }) {
   const [user, setUser] = useState(initialUser),
     [data, setData] = useState<WorkspaceData | null>(null),
@@ -269,7 +519,16 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
     [removalTarget, setRemovalTarget] = useState<User | null>(null),
     [selected, setSelected] = useState<string | null>(null),
     [mobile, setMobile] = useState(false),
-    [refreshing, setRefreshing] = useState(false);
+    [refreshing, setRefreshing] = useState(false),
+    [logSearch, setLogSearch] = useState(""),
+    [logFilter, setLogFilter] = useState<"ALL" | "LOGIN" | "LOGOUT">("ALL"),
+    [showComposeEmail, setShowComposeEmail] = useState(false),
+    [composePreset, setComposePreset] = useState<{
+      to?: string;
+      subject?: string;
+      text?: string;
+      taskId?: string;
+    } | null>(null);
   const admin = user.role === "admin";
   const load = useCallback(async () => {
     try {
@@ -382,11 +641,15 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
           : "Your tasks. Your progress."
         : page === "Completed"
           ? "A little progress, every day."
-          : page === "Team"
-            ? "Great work starts with a team."
-            : page === "Activity"
-              ? "The latest from your workspace."
-              : "Your workspace, your account.";
+          : page === "Mail"
+            ? "Domain Mailbox & Direct Communications"
+            : page === "Team"
+              ? "Great work starts with a team."
+              : page === "Access Logs"
+                ? "Employee Login & Logout Audit Records"
+                : page === "Activity"
+                  ? "The latest from your workspace."
+                  : "Your workspace, your account.";
   const subtitle =
     page === "Overview"
       ? admin
@@ -396,11 +659,15 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
         ? "Plan, prioritize, and move work forward."
         : page === "Completed"
           ? "A record of the work you’ve moved across the finish line."
-          : page === "Team"
-            ? "See who’s working on what, and balance the workload."
-            : page === "Activity"
-              ? "Assignments, updates, and milestones — all in one place."
-              : "Manage your sign-in and view your account details.";
+          : page === "Mail"
+            ? "Send, view, receive, and reply to emails directly using your @autoneural.in account."
+            : page === "Team"
+              ? "See who’s working on what, and balance the workload."
+              : page === "Access Logs"
+                ? "Monitor live employee session activity, track login/logout timestamps, and view audit history."
+                : page === "Activity"
+                  ? "Assignments, updates, and milestones — all in one place."
+                  : "Manage your sign-in and view your account details.";
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobile ? "sidebar-open" : ""}`}>
@@ -428,7 +695,13 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
             [LayoutDashboard, "Overview"],
             [ClipboardList, "Tasks"],
             [CheckCheck, "Completed"],
-            ...(admin ? [[Users, "Team"]] : []),
+            [Mail, "Mail"],
+            ...(admin
+              ? [
+                  [Users, "Team"],
+                  [ShieldCheck, "Access Logs"],
+                ]
+              : []),
             [ActivityIcon, "Activity"],
           ].map(([Icon, label]) => {
             const I = Icon as typeof LayoutDashboard;
@@ -443,6 +716,18 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                 <span>{s === "Tasks" && !admin ? "My tasks" : s}</span>
                 {s === "Tasks" && (
                   <span className="nav-count">{tasks.length - completed}</span>
+                )}
+                {s === "Mail" && Boolean(data?.unreadEmailCount) && (
+                  <span
+                    className="nav-count"
+                    style={{
+                      background: "#4f46e5",
+                      color: "#ffffff",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {data?.unreadEmailCount}
+                  </span>
                 )}
               </button>
             );
@@ -531,6 +816,17 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
               >
                 <Plus size={18} />
                 Create task
+              </button>
+            ) : page === "Mail" ? (
+              <button
+                className="button primary"
+                onClick={() => {
+                  setComposePreset(null);
+                  setShowComposeEmail(true);
+                }}
+              >
+                <Send size={16} />
+                Compose email
               </button>
             ) : (
               <span className="today-label">
@@ -1312,6 +1608,338 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
               </div>
             </>
           )}
+          {page === "Access Logs" && admin && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+              <section className="stats-grid">
+                <Stat
+                  label="Total Logins Recorded"
+                  value={
+                    (data.authLogs || []).filter((l) => l.action === "LOGIN").length
+                  }
+                  detail="Employee & admin sign-ins"
+                  icon={<LogIn size={18} />}
+                  onClick={() => setLogFilter("LOGIN")}
+                  green
+                />
+                <Stat
+                  label="Total Logouts Recorded"
+                  value={
+                    (data.authLogs || []).filter((l) => l.action === "LOGOUT").length
+                  }
+                  detail="Session sign-outs tracked"
+                  icon={<LogOut size={18} />}
+                  onClick={() => setLogFilter("LOGOUT")}
+                />
+                <Stat
+                  label="Accounts Monitored"
+                  value={new Set((data.authLogs || []).map((l) => l.email)).size}
+                  detail="Unique active users"
+                  icon={<Users size={18} />}
+                  onClick={() => setLogFilter("ALL")}
+                />
+                <Stat
+                  label="Audit Trail"
+                  value={(data.authLogs || []).length}
+                  detail="Live access events recorded"
+                  icon={<ShieldCheck size={18} />}
+                  green
+                  onClick={() => setLogFilter("ALL")}
+                />
+              </section>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: "12px",
+                  background: "var(--white)",
+                  padding: "14px 18px",
+                  borderRadius: "var(--radius)",
+                  border: "1px solid var(--line)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "10px",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    flex: 1,
+                  }}
+                >
+                  <div style={{ position: "relative", minWidth: "240px" }}>
+                    <Search
+                      size={16}
+                      style={{
+                        position: "absolute",
+                        left: "10px",
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        color: "var(--muted)",
+                      }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Search by name, email, IP..."
+                      value={logSearch}
+                      onChange={(e) => setLogSearch(e.target.value)}
+                      style={{
+                        padding: "7px 12px 7px 32px",
+                        borderRadius: "8px",
+                        border: "1px solid var(--line)",
+                        width: "100%",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    {(["ALL", "LOGIN", "LOGOUT"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        className={`button ${logFilter === mode ? "primary" : ""}`}
+                        style={{ padding: "6px 14px", fontSize: "0.85rem" }}
+                        onClick={() => setLogFilter(mode)}
+                      >
+                        {mode === "ALL"
+                          ? "All Events"
+                          : mode === "LOGIN"
+                            ? "Logins"
+                            : "Logouts"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button
+                    className="button primary"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                    onClick={() => downloadAuthLogsCsv(data.authLogs || [])}
+                  >
+                    <Download size={16} />
+                    Export CSV
+                  </button>
+                </div>
+              </div>
+
+              <section className="panel" style={{ padding: "0", overflow: "hidden" }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      textAlign: "left",
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    <thead>
+                      <tr
+                        style={{
+                          background: "#f8faf9",
+                          borderBottom: "1px solid var(--line)",
+                          color: "var(--muted)",
+                        }}
+                      >
+                        <th style={{ padding: "12px 18px", fontWeight: "600" }}>
+                          Timestamp (IST)
+                        </th>
+                        <th style={{ padding: "12px 18px", fontWeight: "600" }}>
+                          Employee / User
+                        </th>
+                        <th style={{ padding: "12px 18px", fontWeight: "600" }}>
+                          Action
+                        </th>
+                        <th style={{ padding: "12px 18px", fontWeight: "600" }}>
+                          IP Address
+                        </th>
+                        <th style={{ padding: "12px 18px", fontWeight: "600" }}>
+                          Device / User Agent
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(() => {
+                        const logs = (data.authLogs || []).filter((l) => {
+                          if (logFilter !== "ALL" && l.action !== logFilter)
+                            return false;
+                          if (
+                            logSearch &&
+                            !`${l.name} ${l.email} ${l.ip || ""} ${l.action}`
+                              .toLowerCase()
+                              .includes(logSearch.toLowerCase())
+                          )
+                            return false;
+                          return true;
+                        });
+
+                        if (logs.length === 0) {
+                          return (
+                            <tr>
+                              <td
+                                colSpan={5}
+                                style={{
+                                  padding: "36px",
+                                  textAlign: "center",
+                                  color: "var(--muted)",
+                                }}
+                              >
+                                <ShieldCheck
+                                  size={32}
+                                  style={{
+                                    margin: "0 auto 10px",
+                                    opacity: 0.5,
+                                    display: "block",
+                                  }}
+                                />
+                                No login or logout records found matching your filters.
+                              </td>
+                            </tr>
+                          );
+                        }
+
+                        return logs.map((log) => {
+                          const dt = new Date(log.timestamp);
+                          const dateFormatted = dt.toLocaleDateString("en-IN", {
+                            timeZone: "Asia/Kolkata",
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric",
+                          });
+                          const timeFormatted = dt.toLocaleTimeString("en-IN", {
+                            timeZone: "Asia/Kolkata",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                          });
+                          const isLogin = log.action === "LOGIN";
+
+                          return (
+                            <tr
+                              key={log.id}
+                              style={{
+                                borderBottom: "1px solid var(--line)",
+                              }}
+                            >
+                              <td
+                                style={{
+                                  padding: "12px 18px",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                <strong>{timeFormatted}</strong>
+                                <br />
+                                <small style={{ color: "var(--muted)" }}>
+                                  {dateFormatted}
+                                </small>
+                              </td>
+                              <td style={{ padding: "12px 18px" }}>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "10px",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      flexDirection: "column",
+                                    }}
+                                  >
+                                    <strong style={{ fontSize: "0.95rem" }}>
+                                      {log.name}
+                                    </strong>
+                                    <small style={{ color: "var(--muted)" }}>
+                                      {log.email}
+                                    </small>
+                                  </div>
+                                  <span
+                                    className="label-pill"
+                                    style={{
+                                      fontSize: "0.72rem",
+                                      background:
+                                        log.role === "admin"
+                                          ? "#fef3c7"
+                                          : "#e0e7ff",
+                                      color:
+                                        log.role === "admin"
+                                          ? "#92400e"
+                                          : "#3730a3",
+                                    }}
+                                  >
+                                    {log.role === "admin"
+                                      ? "Admin"
+                                      : "Employee"}
+                                  </span>
+                                </div>
+                              </td>
+                              <td
+                                style={{
+                                  padding: "12px 18px",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "5px",
+                                    padding: "4px 10px",
+                                    borderRadius: "12px",
+                                    fontSize: "0.8rem",
+                                    fontWeight: "600",
+                                    background: isLogin ? "#dcfce7" : "#fee2e2",
+                                    color: isLogin ? "#15803d" : "#b91c1c",
+                                  }}
+                                >
+                                  {isLogin ? (
+                                    <LogIn size={13} />
+                                  ) : (
+                                    <LogOut size={13} />
+                                  )}
+                                  {isLogin ? "Signed In" : "Signed Out"}
+                                </span>
+                              </td>
+                              <td
+                                style={{
+                                  padding: "12px 18px",
+                                  fontFamily: "monospace",
+                                  fontSize: "0.85rem",
+                                  color: "#334155",
+                                }}
+                              >
+                                {log.ip || "127.0.0.1"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "12px 18px",
+                                  fontSize: "0.8rem",
+                                  color: "var(--muted)",
+                                  maxWidth: "280px",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title={log.userAgent || "Browser Client"}
+                              >
+                                {log.userAgent || "Browser Client"}
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          )}
           {page === "Activity" && (
             <section className="panel activity-page">
               <div className="panel-heading">
@@ -1327,6 +1955,25 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                 />
               )}
             </section>
+          )}
+          {page === "Mail" && (
+            <MailView
+              user={user}
+              emails={data.emails || []}
+              unreadCount={data.unreadEmailCount || 0}
+              team={data.team}
+              tasks={data.tasks}
+              emailStatus={data.emailStatus}
+              onRefresh={load}
+              notify={notify}
+              onCompose={(preset) => {
+                setComposePreset(preset || null);
+                setShowComposeEmail(true);
+              }}
+              onOpenTask={(taskId) => {
+                setSelected(taskId);
+              }}
+            />
           )}
           {page === "Settings" && (
             <div className="settings-grid">
@@ -1360,6 +2007,13 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                   );
                 }}
               />
+              {admin && (
+                <EmailSettingsCard
+                  status={data.emailStatus}
+                  adminEmail={user.email}
+                  notify={notify}
+                />
+              )}
             </div>
           )}
           <footer className="workspace-footer">
@@ -1398,6 +2052,24 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
           notify={notify}
         />
       )}
+      {showComposeEmail && (
+        <ComposeEmailModal
+          user={user}
+          team={data.team}
+          tasks={data.tasks}
+          initialPreset={composePreset}
+          onClose={() => {
+            setShowComposeEmail(false);
+            setComposePreset(null);
+          }}
+          onSent={async () => {
+            await load();
+            setShowComposeEmail(false);
+            setComposePreset(null);
+          }}
+          notify={notify}
+        />
+      )}
       {selected && (
         <TaskDetail
           id={selected}
@@ -1406,6 +2078,20 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
           onClose={() => setSelected(null)}
           onSaved={load}
           notify={notify}
+          onEmailTask={(t) => {
+            setSelected(null);
+            setPage("Mail");
+            setComposePreset({
+              to:
+                user.role === "admin"
+                  ? (data.team.find((u) => u.id === t.assigneeId)?.email || "")
+                  : (data.team.find((u) => u.role === "admin")?.email || ""),
+              subject: `[AN-${String(t.number).padStart(3, "0")}] ${t.title}`,
+              text: `Hi,\n\nRegarding task AN-${String(t.number).padStart(3, "0")} (${t.title}):\n\n`,
+              taskId: t.id,
+            });
+            setShowComposeEmail(true);
+          }}
         />
       )}
       {toast && (
@@ -1819,6 +2505,7 @@ function TaskDetail({
   onClose,
   onSaved,
   notify,
+  onEmailTask,
 }: {
   id: string;
   user: User;
@@ -1826,6 +2513,7 @@ function TaskDetail({
   onClose: () => void;
   onSaved: () => Promise<void>;
   notify: (s: string) => void;
+  onEmailTask?: (task: Task) => void;
 }) {
   const [detail, setDetail] = useState<{
       task: Task;
@@ -1839,7 +2527,9 @@ function TaskDetail({
     [tab, setTab] = useState("Comments"),
     [attachMode, setAttachMode] = useState<"file" | "link">("file"),
     [attachBusy, setAttachBusy] = useState(false),
-    [detailFile, setDetailFile] = useState<File | null>(null);
+    [detailFile, setDetailFile] = useState<File | null>(null),
+    [confirmDelete, setConfirmDelete] = useState(false),
+    [deleteBusy, setDeleteBusy] = useState(false);
   const detailFileInputRef = useRef<HTMLInputElement>(null);
   const load = useCallback(async () => {
     try {
@@ -1852,6 +2542,24 @@ function TaskDetail({
   useEffect(() => {
     void load();
   }, [load]);
+  const handleDeleteTask = async () => {
+    if (!detail?.task) return;
+    setDeleteBusy(true);
+    setError("");
+    try {
+      await request("/api/workspace", {
+        action: "deleteTask",
+        taskId: detail.task.id,
+      });
+      notify("Task deleted successfully.");
+      onClose();
+      await onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+      setDeleteBusy(false);
+      setConfirmDelete(false);
+    }
+  };
   const change = async (status: Status) => {
     if (!detail) return;
     setBusy(true);
@@ -1922,11 +2630,82 @@ function TaskDetail({
           <div className="detail-title">
             <h1>{t.title}</h1>
             {user.role === "admin" && (
-              <button className="button" onClick={() => setEdit(true)}>
-                Edit task
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <button className="button" onClick={() => setEdit(true)}>
+                  Edit task
+                </button>
+                <button
+                  className="button"
+                  type="button"
+                  style={{
+                    borderColor: "#fca5a5",
+                    color: "#b91c1c",
+                    background: "#fef2f2",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                  onClick={() => setConfirmDelete((prev) => !prev)}
+                  disabled={deleteBusy}
+                  title="Delete task permanently (Admins only)"
+                >
+                  <Trash2 size={15} />
+                  Delete task
+                </button>
+              </div>
             )}
           </div>
+          {confirmDelete && (
+            <div
+              style={{
+                margin: "14px 0",
+                padding: "16px",
+                borderRadius: "8px",
+                background: "#fef2f2",
+                border: "1px solid #f87171",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+              }}
+              role="alert"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "#991b1b" }}>
+                <TriangleAlert size={20} color="#dc2626" />
+                <strong style={{ fontSize: "0.95rem" }}>Confirm Task Deletion</strong>
+              </div>
+              <p style={{ margin: 0, fontSize: "0.86rem", color: "#7f1d1d", lineHeight: 1.45 }}>
+                Are you sure you want to delete <strong>&ldquo;{t.title}&rdquo;</strong>? This action is permanent and cannot be undone. All attachments, comments, and task events will also be deleted.
+              </p>
+              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", marginTop: "4px" }}>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={deleteBusy}
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={deleteBusy}
+                  style={{
+                    background: "#dc2626",
+                    color: "#ffffff",
+                    borderColor: "#b91c1c",
+                    fontWeight: 600,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                  onClick={() => void handleDeleteTask()}
+                >
+                  <Trash2 size={15} />
+                  {deleteBusy ? "Deleting…" : "Yes, Delete Task"}
+                </button>
+              </div>
+            </div>
+          )}
           <div className="detail-meta">
             <div>
               <span>ASSIGNED TO</span>
@@ -2016,6 +2795,24 @@ function TaskDetail({
                 </span>
               )}
             </button>
+            {onEmailTask && (
+              <button
+                className="button"
+                type="button"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  borderColor: "var(--line)",
+                  background: "#ffffff",
+                }}
+                onClick={() => onEmailTask(t)}
+                title="Send an email referencing this task"
+              >
+                <Mail size={16} />
+                Email about task
+              </button>
+            )}
           </div>
           {detail!.attachments?.some((a) => a.approvalStatus === "PENDING") && (
             <div
@@ -2903,4 +3700,1039 @@ function RequestRemovalModal({
     </Modal>
   );
 }
+
+function formatMailTime(iso: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  if (isToday) {
+    return d.toLocaleTimeString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+  return d.toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatFullMailDateTime(iso: string) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function MailView({
+  user,
+  emails,
+  unreadCount,
+  team,
+  tasks,
+  emailStatus,
+  onRefresh,
+  notify,
+  onCompose,
+  onOpenTask,
+}: {
+  user: User;
+  emails: EmailMessage[];
+  unreadCount: number;
+  team: User[];
+  tasks: Task[];
+  emailStatus?: WorkspaceData["emailStatus"];
+  onRefresh: () => Promise<void>;
+  notify: (s: string) => void;
+  onCompose: (preset?: { to?: string; subject?: string; text?: string; taskId?: string }) => void;
+  onOpenTask?: (taskId: string) => void;
+}) {
+  const [folder, setFolder] = useState<"inbox" | "sent" | "all">("inbox");
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [threadMessages, setThreadMessages] = useState<EmailMessage[]>([]);
+  const [loadingThread, setLoadingThread] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+
+  // Folder filtering
+  const folderEmails = emails.filter((m) => {
+    const isInbox =
+      m.direction === "INBOUND" ||
+      m.recipientEmail.toLowerCase() === user.email.toLowerCase();
+    const isSent =
+      m.direction === "OUTBOUND" &&
+      m.senderEmail.toLowerCase() === user.email.toLowerCase();
+    if (folder === "inbox") return isInbox;
+    if (folder === "sent") return isSent;
+    return true; // all
+  });
+
+  // Search filtering
+  const visibleEmails = search.trim()
+    ? folderEmails.filter((m) =>
+        `${m.senderName} ${m.senderEmail} ${m.recipientEmail} ${m.subject} ${m.snippet || m.body}`
+          .toLowerCase()
+          .includes(search.toLowerCase())
+      )
+    : folderEmails;
+
+  // Selected email object
+  const selectedEmail =
+    emails.find((m) => m.id === selectedId) || visibleEmails[0] || null;
+
+  // Auto-select first email if none selected
+  useEffect(() => {
+    if (!selectedId && visibleEmails.length > 0) {
+      setSelectedId(visibleEmails[0].id);
+    }
+  }, [selectedId, visibleEmails]);
+
+  // Load thread messages when selected email changes
+  useEffect(() => {
+    if (!selectedEmail) {
+      setThreadMessages([]);
+      return;
+    }
+    let cancelled = false;
+    const loadThread = async () => {
+      setLoadingThread(true);
+      try {
+        const threadKey = selectedEmail.threadId || selectedEmail.id;
+        const res = await request(`/api/workspace?thread=${encodeURIComponent(threadKey)}`, undefined, "GET");
+        if (!cancelled && res.thread && Array.isArray(res.thread) && res.thread.length > 0) {
+          setThreadMessages(res.thread);
+        } else if (!cancelled) {
+          setThreadMessages([selectedEmail]);
+        }
+      } catch {
+        if (!cancelled) setThreadMessages([selectedEmail]);
+      } finally {
+        if (!cancelled) setLoadingThread(false);
+      }
+    };
+    void loadThread();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEmail?.id, selectedEmail?.threadId]);
+
+  // Auto-mark seen when viewing unread email
+  useEffect(() => {
+    if (
+      selectedEmail &&
+      selectedEmail.status !== "read" &&
+      (selectedEmail.direction === "INBOUND" ||
+        selectedEmail.recipientEmail.toLowerCase() === user.email.toLowerCase())
+    ) {
+      void (async () => {
+        try {
+          await request("/api/workspace", {
+            action: "markEmailSeen",
+            emailId: selectedEmail.id,
+            seen: true,
+          });
+          selectedEmail.status = "read";
+          selectedEmail.seenAt = new Date().toISOString();
+          void onRefresh();
+        } catch {
+          // non-blocking
+        }
+      })();
+    }
+  }, [selectedEmail?.id]);
+
+  // Handle Mark Seen / Unread toggle
+  const handleToggleSeen = async () => {
+    if (!selectedEmail) return;
+    const nextSeen = selectedEmail.status !== "read";
+    try {
+      await request("/api/workspace", {
+        action: "markEmailSeen",
+        emailId: selectedEmail.id,
+        seen: nextSeen,
+      });
+      selectedEmail.status = nextSeen ? "read" : "unread";
+      selectedEmail.seenAt = nextSeen ? new Date().toISOString() : undefined;
+      await onRefresh();
+      notify(nextSeen ? "Email marked as read." : "Email marked as unread.");
+    } catch (err) {
+      notify((err as Error).message);
+    }
+  };
+
+  // Handle Send Reply
+  const handleSendReply = async () => {
+    if (!selectedEmail || !replyText.trim() || replyBusy) return;
+    setReplyBusy(true);
+    try {
+      const res = await request("/api/workspace", {
+        action: "replyEmail",
+        emailId: selectedEmail.id,
+        text: replyText.trim(),
+      });
+      if (res.reply) {
+        setThreadMessages((prev) => [...prev, res.reply]);
+      }
+      setReplyText("");
+      notify("Reply sent successfully.");
+      await onRefresh();
+    } catch (err) {
+      notify((err as Error).message);
+    } finally {
+      setReplyBusy(false);
+    }
+  };
+
+  // Helper to simulate an inbound test email for demonstration
+  const handleSimulateInbound = async () => {
+    setSimulating(true);
+    try {
+      await request("/api/workspace", {
+        action: "simulateInbound",
+        from: "partner@autoneural.in",
+        to: user.email,
+        subject: `Update regarding AutoNeural milestone (${new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })})`,
+        text: `Hello ${user.name},\n\nWe have reviewed the project documents and deliverables. Everything looks well on track. Please proceed with the next milestone!\n\nBest regards,\nAutoNeural Partner Team`,
+      });
+      await onRefresh();
+      setFolder("inbox");
+      notify("Simulated inbound email received in your inbox.");
+    } catch (err) {
+      notify((err as Error).message);
+    } finally {
+      setSimulating(false);
+    }
+  };
+
+  // Determine reply recipient
+  const replyTargetEmail = selectedEmail
+    ? selectedEmail.direction === "INBOUND"
+      ? selectedEmail.replyTo || selectedEmail.senderEmail
+      : selectedEmail.recipientEmail
+    : "";
+
+  const inboxUnread = emails.filter(
+    (m) =>
+      (m.direction === "INBOUND" ||
+        m.recipientEmail.toLowerCase() === user.email.toLowerCase()) &&
+      m.status === "unread"
+  ).length;
+
+  const sentCount = emails.filter(
+    (m) =>
+      m.direction === "OUTBOUND" &&
+      m.senderEmail.toLowerCase() === user.email.toLowerCase()
+  ).length;
+
+  return (
+    <div className="mail-shell">
+      {/* Left Sidebar: Toolbar + Folders + Email List */}
+      <aside className="mail-sidebar">
+        <div className="mail-toolbar">
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                background: "#ffffff",
+                border: "1px solid var(--line)",
+                borderRadius: "8px",
+                padding: "6px 10px",
+              }}
+            >
+              <Search size={14} style={{ color: "var(--muted)" }} />
+              <input
+                type="text"
+                placeholder="Search mail..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{
+                  border: 0,
+                  outline: "none",
+                  fontSize: "12px",
+                  width: "100%",
+                  background: "transparent",
+                  color: "var(--ink)",
+                }}
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setSearch("")}
+                  style={{ width: "16px", height: "16px" }}
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              className="icon-button"
+              title="Refresh Mailbox"
+              onClick={() => void onRefresh()}
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
+
+          <div className="mail-folder-tabs">
+            <button
+              type="button"
+              className={`mail-folder-tab ${folder === "inbox" ? "selected" : ""}`}
+              onClick={() => setFolder("inbox")}
+            >
+              <Inbox size={13} />
+              <span>Inbox</span>
+              {inboxUnread > 0 && (
+                <span
+                  style={{
+                    background: "#4f46e5",
+                    color: "#ffffff",
+                    borderRadius: "999px",
+                    padding: "1px 6px",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                  }}
+                >
+                  {inboxUnread}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              className={`mail-folder-tab ${folder === "sent" ? "selected" : ""}`}
+              onClick={() => setFolder("sent")}
+            >
+              <Send size={13} />
+              <span>Sent</span>
+              <span style={{ fontSize: "10px", color: "var(--muted)" }}>
+                {sentCount}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`mail-folder-tab ${folder === "all" ? "selected" : ""}`}
+              onClick={() => setFolder("all")}
+            >
+              <Mail size={13} />
+              <span>All</span>
+              <span style={{ fontSize: "10px", color: "var(--muted)" }}>
+                {emails.length}
+              </span>
+            </button>
+          </div>
+
+          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <button
+              type="button"
+              className="button primary"
+              style={{
+                flex: 1,
+                fontSize: "12px",
+                padding: "7px 12px",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+              }}
+              onClick={() => onCompose()}
+            >
+              <Send size={13} />
+              <span>Compose Email</span>
+            </button>
+            <button
+              type="button"
+              className="button secondary"
+              title="Simulate receiving an inbound domain email"
+              disabled={simulating}
+              onClick={handleSimulateInbound}
+              style={{ fontSize: "11px", padding: "7px 10px", whiteSpace: "nowrap" }}
+            >
+              {simulating ? "Receiving…" : "+ Inbound Demo"}
+            </button>
+          </div>
+        </div>
+
+        {/* Email Cards List */}
+        <div className="mail-list">
+          {visibleEmails.length === 0 ? (
+            <div
+              style={{
+                padding: "50px 20px",
+                textAlign: "center",
+                color: "var(--muted)",
+                fontSize: "12px",
+              }}
+            >
+              <Mail
+                size={36}
+                style={{ opacity: 0.3, margin: "0 auto 12px", display: "block" }}
+              />
+              <p style={{ margin: 0, fontWeight: 500 }}>
+                {search ? "No emails match your search." : `No messages in ${folder}.`}
+              </p>
+            </div>
+          ) : (
+            visibleEmails.map((m) => {
+              const isSelected = selectedEmail?.id === m.id;
+              const isUnread =
+                m.status === "unread" &&
+                (m.direction === "INBOUND" ||
+                  m.recipientEmail.toLowerCase() === user.email.toLowerCase());
+              const displayName =
+                m.direction === "OUTBOUND"
+                  ? `To: ${
+                      team.find(
+                        (u) =>
+                          u.email.toLowerCase() === m.recipientEmail.toLowerCase()
+                      )?.name || m.recipientEmail
+                    }`
+                  : m.senderName || m.senderEmail;
+
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`mail-item ${isSelected ? "selected" : ""} ${
+                    isUnread ? "unread" : ""
+                  }`}
+                  onClick={() => setSelectedId(m.id)}
+                >
+                  <div className="mail-item-header">
+                    <span className="mail-item-name">
+                      {isUnread && (
+                        <span
+                          className="mail-unread-dot"
+                          title="Unread message"
+                        />
+                      )}
+                      {displayName}
+                    </span>
+                    <span className="mail-item-time">
+                      {formatMailTime(m.createdAt)}
+                    </span>
+                  </div>
+                  <div className="mail-item-subject">
+                    {m.taskId && (
+                      <span
+                        style={{
+                          background: "rgba(99, 102, 241, 0.12)",
+                          color: "#4f46e5",
+                          padding: "1px 5px",
+                          borderRadius: "4px",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          marginRight: "6px",
+                          display: "inline-block",
+                        }}
+                      >
+                        Task
+                      </span>
+                    )}
+                    {m.subject || "(No subject)"}
+                  </div>
+                  <div className="mail-item-snippet">
+                    {m.snippet || m.body.slice(0, 100)}
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </aside>
+
+      {/* Right Pane: Selected Email / Conversation Thread Reader */}
+      <section className="mail-reader">
+        {!selectedEmail ? (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--muted)",
+              padding: "40px",
+            }}
+          >
+            <Mail size={48} style={{ opacity: 0.2, marginBottom: "16px" }} />
+            <h3 style={{ margin: "0 0 6px", fontSize: "15px", color: "var(--ink)" }}>
+              No message selected
+            </h3>
+            <p style={{ margin: 0, fontSize: "12px", maxWidth: "280px", textAlign: "center" }}>
+              Select an email from your {folder} to view content, history, and reply directly.
+            </p>
+          </div>
+        ) : (
+          <>
+            {!emailStatus?.configured && (
+              <div
+                style={{
+                  background: "#fffbeb",
+                  borderBottom: "1px solid #fde68a",
+                  padding: "8px 24px",
+                  fontSize: "11px",
+                  color: "#92400e",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <span>
+                  <strong>CRM Mailbox Active:</strong> Live delivery to external Hostinger Webmail is in local simulation mode. To dispatch live external emails via Hostinger mail servers, add your Hostinger email password to <code>.env.local</code>.
+                </span>
+              </div>
+            )}
+            {/* Reader Header */}
+            <div className="mail-reader-header">
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h2 className="mail-reader-subject">
+                  {selectedEmail.subject || "(No subject)"}
+                </h2>
+                <div className="mail-reader-meta">
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Avatar
+                      user={{
+                        name:
+                          selectedEmail.direction === "OUTBOUND"
+                            ? user.name
+                            : selectedEmail.senderName || selectedEmail.senderEmail,
+                      }}
+                      small
+                    />
+                    <div>
+                      <strong style={{ fontSize: "12px", color: "var(--ink)" }}>
+                        {selectedEmail.senderName || selectedEmail.senderEmail}
+                      </strong>{" "}
+                      <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+                        &lt;{selectedEmail.senderEmail}&gt;
+                      </span>
+                      <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>
+                        To: {selectedEmail.recipientEmail}
+                        {selectedEmail.replyTo &&
+                          selectedEmail.replyTo !== selectedEmail.senderEmail && (
+                            <span style={{ marginLeft: "8px" }}>
+                              • Reply-To: {selectedEmail.replyTo}
+                            </span>
+                          )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Reader Action Controls */}
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "flex-end",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      padding: "3px 8px",
+                      borderRadius: "6px",
+                      background:
+                        selectedEmail.direction === "OUTBOUND"
+                          ? "#e0e7ff"
+                          : "#dcfce7",
+                      color:
+                        selectedEmail.direction === "OUTBOUND"
+                          ? "#4338ca"
+                          : "#15803d",
+                    }}
+                  >
+                    {selectedEmail.direction === "OUTBOUND" ? "Sent Mail" : "Received"}
+                  </span>
+                  <button
+                    type="button"
+                    className="button secondary"
+                    style={{
+                      fontSize: "11px",
+                      padding: "4px 10px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "5px",
+                    }}
+                    onClick={handleToggleSeen}
+                    title={selectedEmail.status === "read" ? "Mark as unread" : "Mark as read"}
+                  >
+                    {selectedEmail.status === "read" ? (
+                      <>
+                        <EyeOff size={13} />
+                        <span>Mark Unread</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye size={13} />
+                        <span>Mark Read</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  {formatFullMailDateTime(selectedEmail.createdAt)}
+                  {Boolean(selectedEmail.seenAt) && (
+                    <span style={{ marginLeft: "6px" }}>
+                      • Seen {formatMailTime(selectedEmail.seenAt!)}
+                    </span>
+                  )}
+                </div>
+                {selectedEmail.taskId && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    style={{
+                      fontSize: "11px",
+                      color: "#4f46e5",
+                      fontWeight: 600,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: 0,
+                    }}
+                    onClick={() => onOpenTask?.(selectedEmail.taskId!)}
+                  >
+                    <LinkIcon size={12} />
+                    <span>View Task Reference</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Reader Content / Thread Messages */}
+            <div className="mail-reader-content">
+              {loadingThread && (
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "var(--muted)",
+                    marginBottom: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <LoaderCircle size={12} className="spin" />
+                  Loading full thread…
+                </div>
+              )}
+
+              <div className="mail-thread-history">
+                {(threadMessages.length > 0 ? threadMessages : [selectedEmail]).map(
+                  (msg, idx) => {
+                    const isOut = msg.direction === "OUTBOUND";
+                    return (
+                      <div
+                        key={msg.id || idx}
+                        className={`mail-thread-msg ${isOut ? "outbound" : "inbound"}`}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            marginBottom: "10px",
+                            borderBottom: "1px solid var(--line)",
+                            paddingBottom: "8px",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <Avatar
+                              user={{
+                                name:
+                                  isOut && msg.senderEmail.toLowerCase() === user.email.toLowerCase()
+                                    ? user.name
+                                    : msg.senderName || msg.senderEmail,
+                              }}
+                              small
+                            />
+                            <div>
+                              <strong style={{ fontSize: "12px", color: "var(--ink)" }}>
+                                {msg.senderName || msg.senderEmail}
+                              </strong>{" "}
+                              <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+                                &lt;{msg.senderEmail}&gt;
+                              </span>
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span
+                              style={{
+                                fontSize: "10px",
+                                fontWeight: 600,
+                                textTransform: "uppercase",
+                                padding: "2px 6px",
+                                borderRadius: "4px",
+                                background: isOut ? "#e0e7ff" : "#dcfce7",
+                                color: isOut ? "#4338ca" : "#15803d",
+                              }}
+                            >
+                              {isOut ? "Outbound" : "Inbound"}
+                            </span>
+                            <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+                              {formatFullMailDateTime(msg.createdAt)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            fontSize: "13px",
+                            lineHeight: 1.6,
+                            color: "var(--ink)",
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                          }}
+                        >
+                          {msg.body}
+                        </div>
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            </div>
+
+            {/* Inline Quick Reply Box */}
+            <div className="mail-reply-box">
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "8px",
+                }}
+              >
+                <div>
+                  <strong style={{ fontSize: "12px", color: "var(--ink)" }}>
+                    Reply to:{" "}
+                  </strong>
+                  <span style={{ fontSize: "12px", color: "var(--muted)" }}>
+                    {replyTargetEmail}
+                  </span>
+                </div>
+                <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  From: {user.name} &lt;{user.email}&gt;
+                </span>
+              </div>
+              <textarea
+                rows={3}
+                placeholder={`Type your reply to ${replyTargetEmail}... (Ctrl+Enter to send)`}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSendReply();
+                  }
+                }}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--line)",
+                  fontSize: "13px",
+                  fontFamily: "inherit",
+                  resize: "vertical",
+                  background: "#ffffff",
+                  color: "var(--ink)",
+                  boxSizing: "border-box",
+                }}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginTop: "10px",
+                }}
+              >
+                <small style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  Dispatched via domain mail server. Thread history is preserved.
+                </small>
+                <button
+                  type="button"
+                  className="button primary"
+                  disabled={replyBusy || !replyText.trim()}
+                  onClick={handleSendReply}
+                  style={{
+                    fontSize: "12px",
+                    padding: "6px 14px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <Reply size={14} />
+                  <span>{replyBusy ? "Sending…" : "Send Reply"}</span>
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ComposeEmailModal({
+  user,
+  team,
+  tasks,
+  initialPreset,
+  onClose,
+  onSent,
+  notify,
+}: {
+  user: User;
+  team: User[];
+  tasks: Task[];
+  initialPreset?: {
+    to?: string;
+    subject?: string;
+    text?: string;
+    taskId?: string;
+  } | null;
+  onClose: () => void;
+  onSent: () => Promise<void>;
+  notify: (s: string) => void;
+}) {
+  const [to, setTo] = useState(initialPreset?.to || "");
+  const [subject, setSubject] = useState(initialPreset?.subject || "");
+  const [taskId, setTaskId] = useState(initialPreset?.taskId || "");
+  const [text, setText] = useState(initialPreset?.text || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const otherTeam = team.filter(
+    (u) => u.email.toLowerCase() !== user.email.toLowerCase()
+  );
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!to.trim() || !subject.trim() || !text.trim()) {
+      setError("Please fill in recipient, subject, and message content.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await request("/api/workspace", {
+        action: "sendUserEmail",
+        to: to.trim(),
+        subject: subject.trim(),
+        text: text.trim(),
+        taskId: taskId || undefined,
+      });
+      await onSent();
+      notify(`Email dispatched to ${to.trim()}`);
+      onClose();
+    } catch (err) {
+      setError((err as Error).message || "Failed to dispatch email.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Compose Domain Email" onClose={onClose} wide>
+      <div
+        style={{
+          background: "rgba(99, 102, 241, 0.07)",
+          border: "1px solid rgba(99, 102, 241, 0.2)",
+          borderRadius: "8px",
+          padding: "10px 14px",
+          marginBottom: "16px",
+          fontSize: "12px",
+          color: "var(--ink)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <strong>Sender: </strong>
+          {user.name} &lt;{user.email}&gt;
+        </div>
+        <span
+          style={{
+            fontSize: "11px",
+            color: "#4f46e5",
+            fontWeight: 600,
+            background: "#ffffff",
+            padding: "2px 8px",
+            borderRadius: "999px",
+            border: "1px solid rgba(99, 102, 241, 0.2)",
+          }}
+        >
+          AutoNeural Mail Domain
+        </span>
+      </div>
+
+      <form onSubmit={handleSubmit}>
+        <div style={{ marginBottom: "14px" }}>
+          <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: 600 }}>
+            To (Recipient Email)
+          </label>
+          <input
+            type="email"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder="recipient@autoneural.in or any external email"
+            required
+            autoFocus
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              border: "1px solid var(--line)",
+              fontSize: "13px",
+              boxSizing: "border-box",
+            }}
+          />
+          {otherTeam.length > 0 && (
+            <div style={{ marginTop: "6px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px" }}>
+              <span style={{ fontSize: "11px", color: "var(--muted)" }}>Quick select:</span>
+              {otherTeam.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => setTo(u.email)}
+                  style={{
+                    fontSize: "11px",
+                    padding: "2px 8px",
+                    borderRadius: "999px",
+                    border: "1px solid",
+                    borderColor: to.toLowerCase() === u.email.toLowerCase() ? "#4f46e5" : "var(--line)",
+                    background: to.toLowerCase() === u.email.toLowerCase() ? "rgba(99, 102, 241, 0.1)" : "#ffffff",
+                    color: to.toLowerCase() === u.email.toLowerCase() ? "#4f46e5" : "var(--ink)",
+                    cursor: "pointer",
+                    fontWeight: to.toLowerCase() === u.email.toLowerCase() ? 600 : 400,
+                  }}
+                >
+                  {u.name} ({u.role})
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: "14px" }}>
+          <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: 600 }}>
+            Subject
+          </label>
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Subject line"
+            required
+            maxLength={200}
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              border: "1px solid var(--line)",
+              fontSize: "13px",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: "14px" }}>
+          <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: 600 }}>
+            Attach Task Reference <span className="optional" style={{ color: "var(--muted)", fontWeight: 400 }}>(Optional)</span>
+          </label>
+          <select
+            value={taskId}
+            onChange={(e) => setTaskId(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              borderRadius: "6px",
+              border: "1px solid var(--line)",
+              fontSize: "13px",
+              boxSizing: "border-box",
+              background: "#ffffff",
+            }}
+          >
+            <option value="">No task reference (Direct message)</option>
+            {tasks.map((t) => (
+              <option key={t.id} value={t.id}>
+                AN-{String(t.number).padStart(3, "0")}: {t.title}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ display: "block", marginBottom: "4px", fontSize: "12px", fontWeight: 600 }}>
+            Message Content
+          </label>
+          <textarea
+            rows={7}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Write your email here..."
+            required
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: "6px",
+              border: "1px solid var(--line)",
+              fontSize: "13px",
+              fontFamily: "inherit",
+              resize: "vertical",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        {error && (
+          <p className="error" role="alert" style={{ marginBottom: "12px" }}>
+            {error}
+          </p>
+        )}
+
+        <div className="modal-actions" style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+          <button type="button" className="button" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={busy}
+            style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+          >
+            <Send size={15} />
+            <span>{busy ? "Dispatching…" : "Send Email"}</span>
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 

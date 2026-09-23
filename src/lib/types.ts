@@ -66,11 +66,50 @@ export type RemovalRequest = {
   reason?: string | null;
   createdAt: string;
 };
+export type AuthLog = {
+  id: string;
+  userId?: string | null;
+  name: string;
+  email: string;
+  role: string;
+  action: "LOGIN" | "LOGOUT";
+  ip?: string | null;
+  userAgent?: string | null;
+  timestamp: string;
+};
+export type EmailMessage = {
+  id: string;
+  threadId: string;
+  senderId?: string | null;
+  senderName: string;
+  senderEmail: string;
+  recipientId?: string | null;
+  recipientEmail: string;
+  subject: string;
+  body: string;
+  status: "unread" | "read";
+  direction: "INBOUND" | "OUTBOUND";
+  replyTo?: string | null;
+  inReplyTo?: string | null;
+  snippet?: string | null;
+  taskId?: string | null;
+  taskTitle?: string | null;
+  createdAt: string;
+  seenAt?: string | null;
+};
 export type WorkspaceData = {
   user: User;
   team: User[];
   tasks: Task[];
   activity: Activity[];
   removalRequests?: RemovalRequest[];
+  authLogs?: AuthLog[];
+  emails?: EmailMessage[];
+  unreadEmailCount?: number;
+  emailStatus?: {
+    provider: "smtp" | "resend" | "emailjs" | "simulated";
+    configured: boolean;
+    fromEmail: string;
+  };
 };
 

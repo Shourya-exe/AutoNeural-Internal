@@ -1,18 +1,21 @@
-# AutoNeural Team CRM
+# AutoNeural Team CRM & API
 
-A private employee task workspace. `info@autoneural.in` is the administrator. Manyu, Rajashi, Shourya, and Warrior Biswas have employee accounts using the exact addresses supplied in the mailbox screenshot.
+A private unified workspace. `info@autoneural.in` (AutoNeural Admin) and `shourya@autoneural.in` (Shourya Kumar, Technical Lead) are administrators with full system management privileges.
 
 ## Run locally
 
-Requires Node.js 22.13+ and the installed npm dependencies.
+Requires Node.js 22.13+ and installed dependencies.
 
 ```sh
-npm install
-npm run setup  # one time only; refuses to overwrite existing accounts
-npm run dev -- --port 3100
+# Start both Next.js Frontend (port 3000) and NestJS Backend (port 3001) concurrently:
+npm run dev
+
+# Or run frontend / backend separately if needed:
+npm run dev:frontend
+npm run dev:backend
 ```
 
-Open http://localhost:3100. Setup writes unique temporary passwords to `output/CRM-INITIAL-LOGINS.txt` with owner-only permissions. Share each password privately with its owner and delete the file after distribution. These are CRM credentials, **not mailbox passwords**. All five users must change their password at first login. The account list is fixed at the five requested emails; there is no public registration.
+Open http://localhost:3000. All employee login and logout events are recorded in SQLite audit logs. Admins can monitor live access events, search records, and export CSV in the **Access Logs** tab. Initial passwords are in `output/CRM-INITIAL-LOGINS.txt`.
 
 ## What works
 
