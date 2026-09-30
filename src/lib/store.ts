@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import {
   randomUUID,
   randomBytes,
@@ -9,6 +9,9 @@ import {
   createHash,
 } from "node:crypto";
 import { z } from "zod";
+import { databasePath, isProduction, maxUploadBytes } from "./config";
+import { AppError } from "./errors";
+import { removeStoredFile, type StoredFile } from "./files";
 import {
   statuses,
   priorities,
@@ -20,6 +23,8 @@ import {
   type WorkspaceData,
   type AuthLog,
   type EmailMessage,
+  MASTER_ADMIN_EMAIL,
+  isMasterAdmin,
 } from "./types";
 import {
   notifyTaskAssigned,
@@ -28,15 +33,15 @@ import {
   getEmailServiceStatus,
   sendEmail,
   renderDirectEmail,
+  getAppBaseUrl,
 } from "./email";
+
+export { AppError };
 
 let connection: DatabaseSync | undefined;
 export function db() {
   if (connection) return connection;
-  const path = resolve(
-    /* turbopackIgnore: true */ process.env.CRM_DATABASE_PATH ||
-      "data/autoneural-crm.sqlite",
-  );
+  const path = databasePath();
   mkdirSync(dirname(path), { recursive: true });
   connection = new DatabaseSync(path);
   connection.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
@@ -58,40 +63,108 @@ export function db() {
     CREATE INDEX IF NOT EXISTS emails_inbox ON emails(recipientEmail, direction, status);
     CREATE INDEX IF NOT EXISTS emails_sent ON emails(senderEmail, direction);
     CREATE INDEX IF NOT EXISTS emails_thread ON emails(threadId, createdAt ASC);
-    CREATE INDEX IF NOT EXISTS emails_time ON emails(createdAt DESC);`);
-  try {
-    connection.exec("ALTER TABLE users ADD COLUMN designation TEXT");
-  } catch {}
-  try {
-    connection.exec("ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'ACTIVE'");
-  } catch {}
+    CREATE INDEX IF NOT EXISTS emails_time ON emails(createdAt DESC);
+    CREATE INDEX IF NOT EXISTS sessions_user ON sessions(userId);
+    CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
+  for (const col of [
+    "users ADD COLUMN designation TEXT",
+    "users ADD COLUMN status TEXT DEFAULT 'ACTIVE'",
+    // Uploaded files: where the bytes live on disk (see lib/files.ts) and their content type.
+    "task_attachments ADD COLUMN storageKey TEXT",
+    "task_attachments ADD COLUMN mimeType TEXT",
+  ]) {
+    try {
+      connection.exec(`ALTER TABLE ${col}`);
+    } catch {}
+  }
 
-  // Auto-seed default admin accounts if users table is empty in production
-  try {
-    const rowCount = connection.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number } | undefined;
-    if (rowCount && rowCount.n === 0 && process.env.NODE_ENV === "production") {
-      connection.exec(`
-        INSERT INTO users (id, name, email, role, password, mustChange, designation, status) VALUES
-        ('6e5369d3-5450-4433-a8f9-4ce4e2a0df6b', 'AutoNeural Admin', 'info@autoneural.in', 'admin', '04f465ddba872e8c312973a62d86ab28:86705d4738a8fca3f899f5669e35abdcee4de55a63b098c4de5ddf657f94526e9a5c8144943f8b6fff48d38773c2690bcb660b69f9aea39acbcd6d15e60be008', 0, 'System Administrator', 'ACTIVE'),
-        ('80fa7160-0de9-4297-bdbb-1fc6f5630423', 'Shourya Kumar', 'shourya@autoneural.in', 'admin', 'ae33a602f25160af0fa12ce7187ade1d:99830a10bf517b763b6530066af7dad859d06c8b3fff6f703028bcf5707778e774327d3a73469f816f711077200dd182d3c88d926e73a9e17b0ba1930cbc8c56', 0, 'Technical Lead', 'ACTIVE');
-      `);
-    }
-  } catch {}
+  bootstrapMasterAdmin(connection);
+  recoverMasterAdmin(connection);
 
-  try {
-    backfillTaskEmailsIfEmpty();
-  } catch {}
+  // One-time data migrations, recorded so they never re-run.
+  connection.exec("CREATE TABLE IF NOT EXISTS migrations(name TEXT PRIMARY KEY, appliedAt TEXT NOT NULL)");
+  const once = (name: string, sql: string) => {
+    if (connection!.prepare("SELECT 1 FROM migrations WHERE name=?").get(name)) return;
+    connection!.exec(sql);
+    connection!.prepare("INSERT INTO migrations VALUES(?,?)").run(name, new Date().toISOString());
+  };
+  // Shourya Kumar stays a team member but is no longer an administrator.
+  once(
+    "2026-09-25-demote-shourya",
+    "UPDATE users SET role='employee' WHERE email='shourya@autoneural.in' AND role='admin'",
+  );
+  // The master admin can never be demoted or deactivated, even by direct edits.
+  connection
+    .prepare("UPDATE users SET role='admin', status='ACTIVE' WHERE email=?")
+    .run(MASTER_ADMIN_EMAIL);
 
   return connection;
 }
-export class AppError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
-    super(message);
+
+/**
+ * A new, empty database has no way in. The master admin is created from
+ * CRM_ADMIN_BOOTSTRAP_PASSWORD (a temporary password that must be changed at first
+ * sign-in), or with `npm run setup`. Nothing is created without an explicit password.
+ */
+function bootstrapMasterAdmin(c: DatabaseSync) {
+  const count = Number((c.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n);
+  if (count > 0) return;
+  const password = process.env.CRM_ADMIN_BOOTSTRAP_PASSWORD ?? "";
+  if (password.length < 12) {
+    if (isProduction())
+      console.warn(
+        `[setup] The workspace has no accounts. Set CRM_ADMIN_BOOTSTRAP_PASSWORD (12+ characters) and restart, then sign in as ${MASTER_ADMIN_EMAIL} and choose a new password.`,
+      );
+    return;
   }
+  c.prepare(
+    "INSERT INTO users(id,name,email,role,password,mustChange,designation,status) VALUES(?,?,?,?,?,1,?,'ACTIVE')",
+  ).run(randomUUID(), "AutoNeural Admin", MASTER_ADMIN_EMAIL, "admin", hashPassword(password), "System Administrator");
+  console.log(
+    `[setup] Created the master admin ${MASTER_ADMIN_EMAIL}. Sign in with CRM_ADMIN_BOOTSTRAP_PASSWORD, choose a new password, then remove that variable.`,
+  );
 }
+
+/**
+ * Master admin recovery. Nobody can approve the master admin's reset inside the app, so set
+ * CRM_MASTER_ADMIN_RESET_PASSWORD (12+ characters) and restart: it becomes a temporary password
+ * that must be changed at sign-in. Each value is applied once, so a forgotten variable cannot keep
+ * resetting the password on every restart; remove it after signing in.
+ */
+export function recoverMasterAdmin(c: DatabaseSync) {
+  const password = process.env.CRM_MASTER_ADMIN_RESET_PASSWORD ?? "";
+  if (!password) return;
+  if (password.length < 12) {
+    console.warn("[setup] CRM_MASTER_ADMIN_RESET_PASSWORD must be at least 12 characters; ignored.");
+    return;
+  }
+  const marker = JSON.stringify(createHash("sha256").update(`master-admin-reset:${password}`).digest("hex"));
+  if (c.prepare("SELECT 1 FROM settings WHERE key='master_admin_reset' AND value=?").get(marker)) return;
+  const changed = c.prepare("UPDATE users SET password=?, mustChange=1 WHERE email=?").run(hashPassword(password), MASTER_ADMIN_EMAIL).changes;
+  if (!Number(changed)) return;
+  c.prepare("DELETE FROM sessions WHERE userId=(SELECT id FROM users WHERE email=?)").run(MASTER_ADMIN_EMAIL);
+  c.prepare("INSERT INTO settings(key,value) VALUES('master_admin_reset',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(marker);
+  console.warn(
+    `[setup] Reset ${MASTER_ADMIN_EMAIL}'s password from CRM_MASTER_ADMIN_RESET_PASSWORD. Sign in, choose a new password, then remove the variable.`,
+  );
+}
+
+/** True until the first account exists (shown by the health check). */
+export function setupRequired() {
+  return Number((db().prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }).n) === 0;
+}
+
+/** Stable secret for signing public links; CRM_SECRET when set, else generated once and kept in the database. */
+export function appSecret() {
+  const configured = process.env.CRM_SECRET?.trim();
+  if (configured) return configured;
+  const row = db().prepare("SELECT value FROM settings WHERE key='app_secret'").get() as { value: string } | undefined;
+  if (row) return JSON.parse(row.value) as string;
+  const secret = randomBytes(32).toString("base64url");
+  db().prepare("INSERT OR IGNORE INTO settings(key,value) VALUES('app_secret',?)").run(JSON.stringify(secret));
+  return JSON.parse((db().prepare("SELECT value FROM settings WHERE key='app_secret'").get() as { value: string }).value) as string;
+}
+
 export function transaction<T>(fn: () => T): T {
   db().exec("BEGIN IMMEDIATE");
   try {
@@ -154,7 +227,6 @@ export function setupAccounts() {
   return transaction(() =>
     [
       ["AutoNeural Admin", "info", "admin", "System Administrator"],
-      ["Shourya Kumar", "shourya", "admin", "Technical Lead"],
     ].map(([name, local, role, designation]) => {
       const password = randomBytes(15).toString("base64url");
       const email = `${local}@autoneural.in`;
@@ -222,25 +294,27 @@ export function allAuthLogs(limit = 100): AuthLog[] {
     return [];
   }
 }
+/** Failed-login budget per 15 minutes: per account, and per client IP across all accounts. */
+const LOGIN_LIMIT_PER_EMAIL = 10;
+const LOGIN_LIMIT_PER_IP = 50;
 export function login(
   email: string,
   password: string,
   context?: { ip?: string; userAgent?: string },
 ) {
   email = email.toLowerCase().trim();
+  // Without a proxy-supplied IP every request would share one bucket, letting anyone lock everyone out.
+  const ipKey = context?.ip && context.ip !== "unknown" ? `ip:${context.ip}` : null;
   const limited = transaction(() => {
     db().prepare("DELETE FROM attempts WHERE expires < ?").run(Date.now());
-    db()
-      .prepare(
-        "INSERT INTO attempts VALUES(?,1,?) ON CONFLICT(email) DO UPDATE SET count=count+1",
-      )
-      .run(email, Date.now() + 15 * 60000);
-    return (
-      Number(
-        db().prepare("SELECT count FROM attempts WHERE email=?").get(email)!
-          .count,
-      ) > 10
+    const bump = db().prepare(
+      "INSERT INTO attempts VALUES(?,1,?) ON CONFLICT(email) DO UPDATE SET count=count+1",
     );
+    const count = (key: string) =>
+      Number((db().prepare("SELECT count FROM attempts WHERE email=?").get(key) as { count: number }).count);
+    bump.run(email, Date.now() + 15 * 60000);
+    if (ipKey) bump.run(ipKey, Date.now() + 15 * 60000);
+    return count(email) > LOGIN_LIMIT_PER_EMAIL || (ipKey !== null && count(ipKey) > LOGIN_LIMIT_PER_IP);
   });
   if (limited)
     throw new AppError(
@@ -248,24 +322,17 @@ export function login(
       "Too many attempts. Please try again in 15 minutes.",
     );
   const row = db().prepare("SELECT * FROM users WHERE email=?").get(email);
-  const isFallbackAdminPassword =
-    Boolean(row) &&
-    (email === "shourya@autoneural.in" || email === "info@autoneural.in") &&
-    (password === "AutoNeural@2026!" || password === "Password123!");
-  const valid =
-    isFallbackAdminPassword ||
-    verifyPassword(
-      password,
-      String(row?.password || `${"a".repeat(32)}:${"0".repeat(128)}`),
-    );
+  const valid = verifyPassword(
+    password,
+    String(row?.password || `${"a".repeat(32)}:${"0".repeat(128)}`),
+  );
   if (!row || !valid)
     throw new AppError(401, "Email or password is incorrect.");
-  if (isFallbackAdminPassword) {
-    try {
-      db().prepare("UPDATE users SET password=? WHERE email=?").run(hashPassword(password), email);
-    } catch {}
-  }
+  if (row.status === "INACTIVE")
+    throw new AppError(403, "This account has been deactivated. Contact your administrator.");
   db().prepare("DELETE FROM attempts WHERE email=?").run(email);
+  // Only failures count against a (possibly shared office) IP.
+  if (ipKey) db().prepare("UPDATE attempts SET count=count-1 WHERE email=? AND count>0").run(ipKey);
   db().prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
   const token = randomBytes(32).toString("base64url");
   db()
@@ -286,7 +353,7 @@ export function login(
 export function userForToken(token: string) {
   const u = db()
     .prepare(
-      "SELECT u.* FROM users u JOIN sessions s ON u.id=s.userId WHERE s.token=? AND s.expires>?",
+      "SELECT u.* FROM users u JOIN sessions s ON u.id=s.userId WHERE s.token=? AND s.expires>? AND (u.status IS NULL OR u.status!='INACTIVE')",
     )
     .get(digest(token), Date.now());
   return u ? publicUser(u) : null;
@@ -343,8 +410,10 @@ export function resetPassword(user: User, userId: string) {
       400,
       "Use your account settings to change your own password.",
     );
-  if (!allUsers().some((u) => u.id === userId))
-    throw new AppError(404, "Employee not found.");
+  const target = allUsers().find((u) => u.id === userId);
+  if (!target) throw new AppError(404, "Employee not found.");
+  if (target.role === "admin" && !isMasterAdmin(user))
+    throw new AppError(403, "Only the master admin can reset an administrator's password.");
   const password = randomBytes(15).toString("base64url");
   transaction(() => {
     db()
@@ -384,6 +453,17 @@ export const taskInput = z.object({
     ),
   project: z.string().trim().max(80).default(""),
 });
+export const linkInput = z.object({
+  name: z.string().trim().min(1).max(180),
+  url: z
+    .string()
+    .trim()
+    .max(2000)
+    .url("Enter a valid link.")
+    .refine((u) => /^https?:\/\//i.test(u), "Only http:// and https:// links can be attached."),
+});
+export const attachmentPurposes = ["REFERENCE", "OUTPUT", "FOR_APPROVAL"] as const;
+type AttachmentPurpose = (typeof attachmentPurposes)[number];
 export function createTask(user: User, input: unknown) {
   requireAdmin(user);
   const p = taskInput.parse(input);
@@ -418,20 +498,17 @@ export function createTask(user: User, input: unknown) {
       `Created task and assigned it to ${target.name}.`,
     );
 
-    const rawAtt = (input as { attachment?: { name?: string; type?: string; url?: string; fileSize?: number; purpose?: string } })?.attachment;
-    if (rawAtt && (rawAtt.name || rawAtt.url)) {
-      const attId = randomUUID();
-      const attName = String(rawAtt.name || "Attachment").trim();
-      const attType = rawAtt.type === "LINK" ? "LINK" : (rawAtt.type || "DOCUMENT");
-      const attUrl = String(rawAtt.url || "#").trim();
-      const attSize = Number(rawAtt.fileSize) || 0;
-      const attPurpose = rawAtt.purpose || "REFERENCE";
+    // A reference link can be attached while creating the task; files are uploaded to
+    // POST /api/attachments once the task exists.
+    const rawAtt = (input as { attachment?: { name?: unknown; url?: unknown } })?.attachment;
+    if (rawAtt?.url) {
+      const link = linkInput.parse({ name: rawAtt.name || rawAtt.url, url: rawAtt.url });
       db()
         .prepare(
-          "INSERT INTO task_attachments(id,taskId,uploaderId,name,type,url,fileSize,purpose,approvalStatus,reviewNote,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO task_attachments(id,taskId,uploaderId,name,type,url,fileSize,purpose,approvalStatus,reviewNote,createdAt) VALUES(?,?,?,?,'LINK',?,NULL,'REFERENCE',NULL,NULL,?)",
         )
-        .run(attId, id, user.id, attName, attType, attUrl, attSize, attPurpose, null, null, time);
-      event(user, id, `Attached ${attType.toLowerCase()}: "${attName}".`);
+        .run(randomUUID(), id, user.id, link.name, link.url, time);
+      event(user, id, `Attached link: "${link.name}".`);
     }
 
     const created = findTask(user, id);
@@ -616,6 +693,8 @@ export function createEmployee(
   const name = z.string().trim().min(2).max(80).parse(input.name);
   const email = z.string().trim().email().toLowerCase().parse(input.email);
   const role = input.role === "admin" ? "admin" : "employee";
+  if (role === "admin" && !isMasterAdmin(adminUser))
+    throw new AppError(403, "Only the master admin can create administrators.");
   const designation = input.designation ? z.string().trim().max(100).parse(input.designation) : null;
 
   const existing = db().prepare("SELECT id FROM users WHERE email=?").get(email);
@@ -638,8 +717,9 @@ export function requestRemoval(adminUser: User, employeeId: string, reason?: str
   if (adminUser.id === employeeId) {
     throw new AppError(400, "You cannot request removal of your own account.");
   }
-  const emp = db().prepare("SELECT id,name FROM users WHERE id=?").get(employeeId) as { id: string; name: string } | undefined;
+  const emp = db().prepare("SELECT id,name,email FROM users WHERE id=?").get(employeeId) as { id: string; name: string; email: string } | undefined;
   if (!emp) throw new AppError(404, "Employee not found.");
+  if (isMasterAdmin(emp)) throw new AppError(403, "The master admin account cannot be removed.");
 
   const pending = db().prepare("SELECT id FROM removal_requests WHERE employeeId=? AND status='PENDING'").get(employeeId);
   if (pending) throw new AppError(409, "A removal request for this employee is already pending review.");
@@ -658,7 +738,8 @@ export function approveRemoval(adminUser: User, requestId: string) {
   if (!req) throw new AppError(404, "Removal request not found.");
   if (req.status !== "PENDING") throw new AppError(400, "Request is no longer pending.");
 
-  if (req.requestedById === adminUser.id) {
+  // Dual control between admins; the master admin may approve alone (it may be the only admin).
+  if (req.requestedById === adminUser.id && !isMasterAdmin(adminUser)) {
     throw new AppError(403, "Dual-authorization required: Another admin account must review and approve this removal request.");
   }
 
@@ -678,118 +759,134 @@ export function rejectRemoval(adminUser: User, requestId: string) {
   db().prepare("UPDATE removal_requests SET status='REJECTED' WHERE id=?").run(requestId);
   return { ok: true, message: "Removal request rejected." };
 }
-export function attachTaskLink(
+const purposeFor = (user: User, purpose: unknown): AttachmentPurpose =>
+  purpose == null || purpose === ""
+    ? user.role === "admin"
+      ? "REFERENCE"
+      : "OUTPUT"
+    : z.enum(attachmentPurposes, { errorMap: () => ({ message: "Choose what this attachment is for." }) }).parse(purpose);
+
+/** Inserts an attachment row; a submission for approval also moves the task into review. */
+function insertAttachment(
   user: User,
   taskId: string,
-  input: { name: string; url: string; purpose?: "REFERENCE" | "OUTPUT" | "FOR_APPROVAL" },
+  a: { name: string; type: "LINK" | "DOCUMENT"; url: string; fileSize: number | null; purpose: AttachmentPurpose; storageKey?: string; mimeType?: string },
+  id: string = randomUUID(),
 ) {
-  findTask(user, taskId);
-  const name = z.string().trim().min(1).max(180).parse(input.name);
-  const url = z.string().trim().url().parse(input.url);
-  const purpose = input.purpose || (user.role === "admin" ? "REFERENCE" : "OUTPUT");
-  const isApproval = purpose === "FOR_APPROVAL";
-
-  return transaction(() => {
-    const id = randomUUID();
-    const time = timestamp();
-    db()
-      .prepare(
-        "INSERT INTO task_attachments(id,taskId,uploaderId,name,type,url,fileSize,purpose,approvalStatus,reviewNote,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(id, taskId, user.id, name, "LINK", url, null, purpose, isApproval ? "PENDING" : null, null, time);
-
-    if (isApproval) {
-      db().prepare("UPDATE tasks SET status='In review' WHERE id=?").run(taskId);
-      event(user, taskId, `Submitted link for approval: "${name}".`);
-    } else {
-      event(user, taskId, `Attached link: "${name}".`);
-    }
-    return { ok: true, id };
-  });
+  const time = timestamp();
+  const isApproval = a.purpose === "FOR_APPROVAL";
+  db()
+    .prepare(
+      "INSERT INTO task_attachments(id,taskId,uploaderId,name,type,url,fileSize,purpose,approvalStatus,reviewNote,createdAt,storageKey,mimeType) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?,?)",
+    )
+    .run(id, taskId, user.id, a.name, a.type, a.url, a.fileSize, a.purpose, isApproval ? "PENDING" : null, time, a.storageKey ?? null, a.mimeType ?? null);
+  const what = a.type === "LINK" ? "link" : "file";
+  if (isApproval) {
+    db().prepare("UPDATE tasks SET status='In review', completedAt=NULL, updatedAt=?, version=version+1 WHERE id=?").run(time, taskId);
+    event(user, taskId, `Submitted ${what} for approval: "${a.name}".`);
+  } else {
+    event(user, taskId, `Attached ${what}: "${a.name}".`);
+  }
+  return { ok: true, id };
 }
-export function attachTaskFile(
-  user: User,
-  taskId: string,
-  input: { name: string; type?: "FILE" | "DOCUMENT"; url: string; fileSize?: number; purpose?: "REFERENCE" | "OUTPUT" | "FOR_APPROVAL" },
-) {
+
+export function attachTaskLink(user: User, taskId: string, input: { name?: unknown; url?: unknown; purpose?: unknown }) {
   findTask(user, taskId);
-  const name = z.string().trim().min(1).max(180).parse(input.name);
-  const type = input.type || "FILE";
-  const url = input.url || "#";
-  const purpose = input.purpose || (user.role === "admin" ? "REFERENCE" : "OUTPUT");
-  const isApproval = purpose === "FOR_APPROVAL";
-
-  return transaction(() => {
-    const id = randomUUID();
-    const time = timestamp();
-    db()
-      .prepare(
-        "INSERT INTO task_attachments(id,taskId,uploaderId,name,type,url,fileSize,purpose,approvalStatus,reviewNote,createdAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(id, taskId, user.id, name, type, url, input.fileSize || 0, purpose, isApproval ? "PENDING" : null, null, time);
-
-    if (isApproval) {
-      db().prepare("UPDATE tasks SET status='In review' WHERE id=?").run(taskId);
-      event(user, taskId, `Uploaded deliverable for approval: "${name}".`);
-    } else {
-      event(user, taskId, `Uploaded ${type.toLowerCase()}: "${name}".`);
-    }
-    return { ok: true, id };
-  });
+  const link = linkInput.parse({ name: input.name, url: input.url });
+  const purpose = purposeFor(user, input.purpose);
+  return transaction(() => insertAttachment(user, taskId, { ...link, type: "LINK", fileSize: null, purpose }));
 }
-export function approveTaskSubmission(user: User, attachmentId: string, note?: string) {
+
+/** Records a file already written by lib/files.ts; the caller removes it if this throws. */
+export function attachTaskFile(user: User, taskId: string, file: StoredFile, input: { name?: unknown; purpose?: unknown }) {
+  findTask(user, taskId);
+  let name = z.string().trim().max(170).optional().parse(input.name) || file.name;
+  // Keep the real extension on renamed files so downloads open in the right app.
+  const ext = file.name.includes(".") ? `.${file.name.split(".").pop()}` : "";
+  if (ext && !name.toLowerCase().endsWith(ext.toLowerCase())) name += ext;
+  const purpose = purposeFor(user, input.purpose);
+  const id = randomUUID();
+  const url = `/api/attachments/${id}`;
+  return transaction(() => ({
+    ...insertAttachment(user, taskId, { name, type: "DOCUMENT", url, fileSize: file.size, purpose, storageKey: file.key, mimeType: file.mime }, id),
+    url,
+  }));
+}
+
+/** An uploaded file the user may download (access follows the task). */
+export function attachmentFile(user: User, attachmentId: string) {
+  const att = db()
+    .prepare("SELECT id,taskId,name,mimeType,fileSize,storageKey FROM task_attachments WHERE id=?")
+    .get(attachmentId) as { id: string; taskId: string; name: string; mimeType: string | null; fileSize: number | null; storageKey: string | null } | undefined;
+  if (!att) throw new AppError(404, "Attachment not found.");
+  findTask(user, att.taskId);
+  if (!att.storageKey || !att.mimeType)
+    throw new AppError(404, "This attachment was recorded before file uploads were stored, so there is no file to download.");
+  return { key: att.storageKey, name: att.name, mime: att.mimeType };
+}
+
+function reviewSubmission(user: User, attachmentId: string, decision: "APPROVED" | "REJECTED", note?: unknown) {
   requireAdmin(user);
-  const att = db().prepare("SELECT * FROM task_attachments WHERE id=?").get(attachmentId) as any;
+  const text = z.string().trim().max(1000).optional().parse(note ?? undefined) || null;
+  const att = db().prepare("SELECT * FROM task_attachments WHERE id=?").get(attachmentId) as
+    | { taskId: string; name: string; purpose: string; approvalStatus: string | null }
+    | undefined;
   if (!att) throw new AppError(404, "Attachment not found.");
   if (att.purpose !== "FOR_APPROVAL") throw new AppError(400, "Only submissions for approval can be reviewed.");
-
+  if (att.approvalStatus !== "PENDING") throw new AppError(409, "This submission has already been reviewed.");
   return transaction(() => {
-    db()
-      .prepare("UPDATE task_attachments SET approvalStatus='APPROVED', reviewNote=? WHERE id=?")
-      .run(note?.trim() || null, attachmentId);
-    event(user, att.taskId, `Approved deliverable: "${att.name}"${note ? ` ("${note}")` : ""}.`);
+    db().prepare("UPDATE task_attachments SET approvalStatus=?, reviewNote=? WHERE id=?").run(decision, text, attachmentId);
+    event(
+      user,
+      att.taskId,
+      decision === "APPROVED"
+        ? `Approved deliverable: "${att.name}"${text ? ` ("${text}")` : ""}.`
+        : `Requested changes on deliverable "${att.name}"${text ? `: "${text}"` : ""}.`,
+    );
+    db().prepare("UPDATE tasks SET updatedAt=?, version=version+1 WHERE id=?").run(timestamp(), att.taskId);
     return { ok: true };
   });
 }
-export function rejectTaskSubmission(user: User, attachmentId: string, note?: string) {
-  requireAdmin(user);
-  const att = db().prepare("SELECT * FROM task_attachments WHERE id=?").get(attachmentId) as any;
-  if (!att) throw new AppError(404, "Attachment not found.");
-  if (att.purpose !== "FOR_APPROVAL") throw new AppError(400, "Only submissions for approval can be reviewed.");
+export const approveTaskSubmission = (user: User, attachmentId: string, note?: unknown) =>
+  reviewSubmission(user, attachmentId, "APPROVED", note);
+export const rejectTaskSubmission = (user: User, attachmentId: string, note?: unknown) =>
+  reviewSubmission(user, attachmentId, "REJECTED", note);
 
-  return transaction(() => {
-    db()
-      .prepare("UPDATE task_attachments SET approvalStatus='REJECTED', reviewNote=? WHERE id=?")
-      .run(note?.trim() || null, attachmentId);
-    event(user, att.taskId, `Requested changes on deliverable "${att.name}"${note ? `: "${note}"` : ""}.`);
-    return { ok: true };
-  });
-}
 export function deleteTaskAttachment(user: User, attachmentId: string) {
-  const att = db().prepare("SELECT * FROM task_attachments WHERE id=?").get(attachmentId) as any;
+  const att = db().prepare("SELECT * FROM task_attachments WHERE id=?").get(attachmentId) as
+    | { taskId: string; uploaderId: string; type: string; name: string; storageKey: string | null }
+    | undefined;
   if (!att) throw new AppError(404, "Attachment not found.");
+  findTask(user, att.taskId);
   if (user.role !== "admin" && att.uploaderId !== user.id) {
     throw new AppError(403, "You do not have permission to delete this attachment.");
   }
-  return transaction(() => {
+  const result = transaction(() => {
     db().prepare("DELETE FROM task_attachments WHERE id=?").run(attachmentId);
-    event(user, att.taskId, `Removed ${att.type.toLowerCase()}: "${att.name}".`);
+    event(user, att.taskId, `Removed ${att.type === "LINK" ? "link" : "file"}: "${att.name}".`);
     return { ok: true };
   });
+  removeStoredFile(att.storageKey);
+  return result;
 }
 export function deleteTask(user: User, taskId: string) {
   if (user.role !== "admin") {
     throw new AppError(403, "Only administrators can delete tasks.");
   }
-  return transaction(() => {
+  const { result, files } = transaction(() => {
     const task = findTask(user, taskId);
+    const files = (db().prepare("SELECT storageKey FROM task_attachments WHERE taskId=? AND storageKey IS NOT NULL").all(taskId) as { storageKey: string }[]).map(
+      (f) => f.storageKey,
+    );
     db().prepare("DELETE FROM task_attachments WHERE taskId=?").run(taskId);
     db().prepare("DELETE FROM comments WHERE taskId=?").run(taskId);
     db().prepare("DELETE FROM events WHERE taskId=?").run(taskId);
     db().prepare("UPDATE emails SET taskId=NULL WHERE taskId=?").run(taskId);
-    db().prepare("DELETE FROM tasks WHERE id=?").run(taskId);
-    return { ok: true, id: taskId, title: task.title };
+    db().prepare("DELETE FROM tasks WHERE id=?").run(taskId); // leads.taskId is ON DELETE SET NULL
+    return { result: { ok: true, id: taskId, title: task.title }, files };
   });
+  files.forEach(removeStoredFile);
+  return result;
 }
 export function workspace(user: User): WorkspaceData {
   const admin = user.role === "admin";
@@ -813,6 +910,7 @@ export function workspace(user: User): WorkspaceData {
     emails: getEmailsForUser(user, "all", 50),
     unreadEmailCount: unreadEmailCount(user),
     emailStatus: admin ? getEmailServiceStatus() : undefined,
+    uploadLimitMb: Math.round(maxUploadBytes() / 1024 / 1024),
   };
 }
 
@@ -878,19 +976,81 @@ export function getEmailThread(user: User, threadId: string): EmailMessage[] {
   }
 }
 
+/** Marks one of the user's own messages read or unread. */
 export function markEmailSeen(
   user: User,
   emailId: string,
   status: "read" | "unread" = "read",
 ): { ok: boolean; id: string; status: string } {
   const email = user.email.toLowerCase();
-  const time = status === "read" ? timestamp() : null;
-  db()
+  const next = z.enum(["read", "unread"]).parse(status);
+  const changed = db()
     .prepare(
-      `UPDATE emails SET status=?, seenAt=? WHERE id=? AND (recipientEmail=? OR senderEmail=? OR ?='admin')`,
+      `UPDATE emails SET status=?, seenAt=? WHERE id=? AND ((recipientEmail=? AND direction='INBOUND') OR (senderEmail=? AND direction='OUTBOUND'))`,
     )
-    .run(status, time, emailId, email, email, user.role);
-  return { ok: true, id: emailId, status };
+    .run(next, next === "read" ? timestamp() : null, emailId, email, email).changes;
+  if (!Number(changed)) throw new AppError(404, "Email message not found.");
+  return { ok: true, id: emailId, status: next };
+}
+
+/** How a message reached its recipient: the email provider, or only the recipient's workspace inbox. */
+export type EmailDelivery = "sent" | "workspace";
+export type SentEmail = EmailMessage & { delivery: EmailDelivery; deliveryError?: string };
+
+/**
+ * Sends a message from a workspace user. Workspace recipients always get it in their
+ * inbox; anyone else only through the configured email provider, so a provider failure
+ * for an outside address is an error and nothing is recorded as sent.
+ */
+async function deliverUserEmail(
+  user: User,
+  m: { to: string; subject: string; body: string; html: string; text: string; threadId: string; inReplyTo: string | null; taskId: string | null },
+): Promise<SentEmail> {
+  const recipientUser = allUsers().find((u) => u.email.toLowerCase() === m.to);
+  const result = await sendEmail({
+    to: m.to,
+    subject: m.subject,
+    html: m.html,
+    text: m.text,
+    fromName: user.name,
+    fromEmail: user.email,
+    replyTo: user.email,
+  });
+  if (!result.success && !recipientUser) {
+    throw result.notConfigured
+      ? new AppError(503, "Email delivery is not configured on this server, so messages to outside addresses cannot be sent. Ask an administrator to add SMTP or Resend settings.")
+      : new AppError(502, `The email could not be sent: ${result.error || "the email provider rejected it"}.`);
+  }
+  const id = randomUUID();
+  const time = timestamp();
+  const insert = db().prepare(
+    `INSERT INTO emails(id, threadId, senderId, senderName, senderEmail, recipientId, recipientEmail, subject, body, status, direction, inReplyTo, taskId, createdAt, seenAt)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  );
+  transaction(() => {
+    insert.run(id, m.threadId, user.id, user.name, user.email.toLowerCase(), recipientUser?.id ?? null, m.to, m.subject, m.body, "read", "OUTBOUND", m.inReplyTo, m.taskId, time, time);
+    if (recipientUser)
+      insert.run(randomUUID(), m.threadId, user.id, user.name, user.email.toLowerCase(), recipientUser.id, m.to, m.subject, m.body, "unread", "INBOUND", m.inReplyTo, m.taskId, time, null);
+  });
+  return {
+    id,
+    threadId: m.threadId,
+    senderId: user.id,
+    senderName: user.name,
+    senderEmail: user.email.toLowerCase(),
+    recipientId: recipientUser?.id ?? null,
+    recipientEmail: m.to,
+    subject: m.subject,
+    body: m.body,
+    status: "read",
+    direction: "OUTBOUND",
+    inReplyTo: m.inReplyTo,
+    taskId: m.taskId,
+    createdAt: time,
+    seenAt: time,
+    delivery: result.success ? "sent" : "workspace",
+    ...(result.success ? {} : { deliveryError: result.notConfigured ? "Email delivery is not configured." : result.error }),
+  };
 }
 
 export async function sendUserEmail(
@@ -902,235 +1062,51 @@ export async function sendUserEmail(
     text?: string;
     taskId?: string;
   },
-): Promise<EmailMessage> {
+): Promise<SentEmail> {
   if (!input) throw new AppError(400, "Email payload is required.");
-  const toEmail = z.string().trim().email().parse(input.to).toLowerCase();
-  const subject = z.string().trim().min(1).max(200).parse(input.subject);
-  const body = z.string().trim().min(1).max(10000).parse(input.body || input.text);
+  const toEmail = z.string().trim().email("Enter a valid recipient email.").parse(input.to).toLowerCase();
+  const subject = z.string().trim().min(1, "Add a subject.").max(200).parse(input.subject);
+  const body = z.string().trim().min(1, "Write a message.").max(10000).parse(input.body || input.text);
   const taskId = input.taskId ? z.string().uuid().parse(input.taskId) : null;
-
-  let task: Task | undefined;
-  if (taskId) {
-    try {
-      task = findTask(user, taskId);
-    } catch {}
-  }
-
-  const appUrl = (process.env.CRM_APP_URL || "https://work.autoneural.in").replace(/\/+$/, "");
-  const taskLink = task ? `${appUrl}?task=${encodeURIComponent(task.id)}` : undefined;
-
+  const task = taskId ? findTask(user, taskId) : undefined;
+  const appUrl = getAppBaseUrl();
   const { html, text } = renderDirectEmail({
-    sender: {
-      name: user.name,
-      email: user.email,
-      designation: user.designation,
-    },
+    sender: { name: user.name, email: user.email, designation: user.designation },
     subject,
     message: body,
-    taskLink,
+    taskLink: task ? `${appUrl}/?task=${encodeURIComponent(task.id)}` : undefined,
     taskTitle: task?.title,
   });
-
-  // 1. Dispatch real email out
-  await sendEmail({
-    to: toEmail,
-    subject,
-    html,
-    text,
-    fromName: user.name,
-    fromEmail: user.email,
-    replyTo: user.email,
-  });
-
-  // 2. Persist in database
-  const id = randomUUID();
-  const threadId = `th_${randomUUID()}`;
-  const time = timestamp();
-
-  const recipientUser = allUsers().find((u) => u.email.toLowerCase() === toEmail);
-
-  transaction(() => {
-    db()
-      .prepare(
-        `INSERT INTO emails(id, threadId, senderId, senderName, senderEmail, recipientId, recipientEmail, subject, body, status, direction, inReplyTo, taskId, createdAt, seenAt)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      )
-      .run(
-        id,
-        threadId,
-        user.id,
-        user.name,
-        user.email.toLowerCase(),
-        recipientUser?.id || null,
-        toEmail,
-        subject,
-        body,
-        "read",
-        "OUTBOUND",
-        null,
-        taskId || null,
-        time,
-        time,
-      );
-
-    if (recipientUser) {
-      const inboxId = randomUUID();
-      db()
-        .prepare(
-          `INSERT INTO emails(id, threadId, senderId, senderName, senderEmail, recipientId, recipientEmail, subject, body, status, direction, inReplyTo, taskId, createdAt, seenAt)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        )
-        .run(
-          inboxId,
-          threadId,
-          user.id,
-          user.name,
-          user.email.toLowerCase(),
-          recipientUser.id,
-          toEmail,
-          subject,
-          body,
-          "unread",
-          "INBOUND",
-          null,
-          taskId || null,
-          time,
-          null,
-        );
-    }
-  });
-
-  return {
-    id,
-    threadId,
-    senderId: user.id,
-    senderName: user.name,
-    senderEmail: user.email.toLowerCase(),
-    recipientId: recipientUser?.id || null,
-    recipientEmail: toEmail,
-    subject,
-    body,
-    status: "read",
-    direction: "OUTBOUND",
-    inReplyTo: null,
-    taskId: taskId || null,
-    taskTitle: task?.title || null,
-    createdAt: time,
-    seenAt: time,
-  };
+  return deliverUserEmail(user, { to: toEmail, subject, body, html, text, threadId: `th_${randomUUID()}`, inReplyTo: null, taskId });
 }
 
-export async function replyToEmail(
-  user: User,
-  emailId: string,
-  replyText: string,
-): Promise<EmailMessage> {
-  replyText = z.string().trim().min(1).max(10000).parse(replyText);
-  const emailRow = db().prepare("SELECT * FROM emails WHERE id=?").get(emailId) as any;
+export async function replyToEmail(user: User, emailId: string, replyText: string): Promise<SentEmail> {
+  replyText = z.string().trim().min(1, "Write a reply.").max(10000).parse(replyText);
+  const me = user.email.toLowerCase();
+  // Only messages in the user's own mailbox can be replied to.
+  const emailRow = db()
+    .prepare("SELECT * FROM emails WHERE id=? AND ((recipientEmail=? AND direction='INBOUND') OR (senderEmail=? AND direction='OUTBOUND'))")
+    .get(emailId, me, me) as
+    | { id: string; threadId: string | null; direction: string; senderEmail: string; senderName: string; recipientEmail: string; subject: string; body: string; taskId: string | null; createdAt: string }
+    | undefined;
   if (!emailRow) throw new AppError(404, "Email message not found.");
-
-  const toEmail = (
-    emailRow.direction === "INBOUND" ? emailRow.senderEmail : emailRow.recipientEmail
-  ).toLowerCase();
-  const replySubject = emailRow.subject.startsWith("Re:")
-    ? emailRow.subject
-    : `Re: ${emailRow.subject}`;
-
-  const id = randomUUID();
-  const threadId = emailRow.threadId || `th_${emailRow.id}`;
-  const time = timestamp();
-  const recipientUser = allUsers().find((u) => u.email.toLowerCase() === toEmail);
-
+  const toEmail = (emailRow.direction === "INBOUND" ? emailRow.senderEmail : emailRow.recipientEmail).toLowerCase();
+  const replySubject = /^re:/i.test(emailRow.subject) ? emailRow.subject : `Re: ${emailRow.subject}`;
   const { html, text } = renderDirectEmail({
-    sender: {
-      name: user.name,
-      email: user.email,
-      designation: user.designation,
-    },
+    sender: { name: user.name, email: user.email, designation: user.designation },
     subject: replySubject,
-    message: `${replyText}\n\n--- On ${new Date(emailRow.createdAt).toLocaleString("en-IN")}, ${emailRow.senderName} wrote: ---\n${emailRow.body}`,
+    message: `${replyText}\n\n--- On ${new Date(emailRow.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}, ${emailRow.senderName} wrote: ---\n${emailRow.body}`,
   });
-
-  // 1. Dispatch reply email
-  await sendEmail({
+  return deliverUserEmail(user, {
     to: toEmail,
     subject: replySubject,
+    body: replyText,
     html,
     text,
-    fromName: user.name,
-    fromEmail: user.email,
-    replyTo: user.email,
+    threadId: emailRow.threadId || `th_${emailRow.id}`,
+    inReplyTo: emailRow.id,
+    taskId: emailRow.taskId,
   });
-
-  // 2. Persist in database
-  transaction(() => {
-    db()
-      .prepare(
-        `INSERT INTO emails(id, threadId, senderId, senderName, senderEmail, recipientId, recipientEmail, subject, body, status, direction, inReplyTo, taskId, createdAt, seenAt)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      )
-      .run(
-        id,
-        threadId,
-        user.id,
-        user.name,
-        user.email.toLowerCase(),
-        recipientUser?.id || null,
-        toEmail,
-        replySubject,
-        replyText,
-        "read",
-        "OUTBOUND",
-        emailId,
-        emailRow.taskId || null,
-        time,
-        time,
-      );
-
-    if (recipientUser) {
-      const inboxId = randomUUID();
-      db()
-        .prepare(
-          `INSERT INTO emails(id, threadId, senderId, senderName, senderEmail, recipientId, recipientEmail, subject, body, status, direction, inReplyTo, taskId, createdAt, seenAt)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        )
-        .run(
-          inboxId,
-          threadId,
-          user.id,
-          user.name,
-          user.email.toLowerCase(),
-          recipientUser.id,
-          toEmail,
-          replySubject,
-          replyText,
-          "unread",
-          "INBOUND",
-          emailId,
-          emailRow.taskId || null,
-          time,
-          null,
-        );
-    }
-  });
-
-  return {
-    id,
-    threadId,
-    senderId: user.id,
-    senderName: user.name,
-    senderEmail: user.email.toLowerCase(),
-    recipientId: recipientUser?.id || null,
-    recipientEmail: toEmail,
-    subject: replySubject,
-    body: replyText,
-    status: "read",
-    direction: "OUTBOUND",
-    inReplyTo: emailId,
-    taskId: emailRow.taskId || null,
-    createdAt: time,
-    seenAt: time,
-  };
 }
 
 export function recordInboundEmail(payload: {
@@ -1143,9 +1119,13 @@ export function recordInboundEmail(payload: {
 }): EmailMessage {
   const fromEmail = z.string().trim().email().parse(payload.fromEmail).toLowerCase();
   const toEmail = z.string().trim().email().parse(payload.toEmail).toLowerCase();
-  const fromName = payload.fromName?.trim() || fromEmail.split("@")[0];
-  const subject = payload.subject?.trim() || "(No Subject)";
-  const body = payload.body?.trim() || "";
+  const fromName = (payload.fromName?.trim() || fromEmail.split("@")[0]).slice(0, 120);
+  const subject = (payload.subject?.trim() || "(No Subject)").slice(0, 200);
+  const body = (payload.body?.trim() || "").slice(0, 100_000);
+  const taskId =
+    payload.taskId && z.string().uuid().safeParse(payload.taskId).success && db().prepare("SELECT 1 FROM tasks WHERE id=?").get(payload.taskId)
+      ? payload.taskId
+      : null;
 
   const id = randomUUID();
   const threadId = `th_${randomUUID()}`;
@@ -1171,7 +1151,7 @@ export function recordInboundEmail(payload: {
       "unread",
       "INBOUND",
       null,
-      payload.taskId || null,
+      taskId,
       time,
       null,
     );
@@ -1189,7 +1169,7 @@ export function recordInboundEmail(payload: {
     status: "unread",
     direction: "INBOUND",
     inReplyTo: null,
-    taskId: payload.taskId || null,
+    taskId,
     createdAt: time,
     seenAt: null,
   };
@@ -1276,36 +1256,3 @@ export function recordTaskNotificationEmail({
     console.error("[recordTaskNotificationEmail Error]", err);
   }
 }
-
-export function backfillTaskEmailsIfEmpty() {
-  try {
-    const row = db().prepare("SELECT COUNT(*) AS c FROM emails").get() as { c: number } | undefined;
-    if (row && row.c > 0) return;
-
-    const allT = db().prepare("SELECT * FROM tasks").all() as any[];
-    for (const t of allT) {
-      const creator = getUserById(t.createdBy);
-      const assignee = getUserById(t.assigneeId);
-      if (creator && assignee) {
-        recordTaskNotificationEmail({
-          type: "ASSIGNED",
-          task: t,
-          sender: creator,
-          recipient: assignee,
-        });
-        if (t.status === "Completed") {
-          recordTaskNotificationEmail({
-            type: "COMPLETED",
-            task: t,
-            sender: assignee,
-            recipient: creator,
-          });
-        }
-      }
-    }
-  } catch (err) {
-    console.error("[backfillTaskEmails Error]", err);
-  }
-}
-
-

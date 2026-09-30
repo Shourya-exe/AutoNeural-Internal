@@ -20,10 +20,11 @@ tmp/
 config/*.json
 !config/*.example.json
 *service-account*.json
-voice-agent/.venv/
+voice-agent/.venv*/
 __pycache__/
 # Archived application and private initial CRM credentials
 archives/
 output/CRM-INITIAL-LOGINS.txt
 output/e2e-*/
+*.log
 

@@ -1,6 +1,21 @@
 import { Resend } from "resend";
 import nodemailer from "nodemailer";
 import type { Task, User } from "./types";
+import { isProduction } from "./config";
+
+/** Escapes text for HTML element content and quoted attributes. */
+export const esc = (s: unknown) =>
+  String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+
+export type SendResult = {
+  success: boolean;
+  id?: string;
+  error?: string;
+  /** Development/test only: logged to the console instead of sent. */
+  simulated?: boolean;
+  /** Production with no email provider configured: nothing was sent. */
+  notConfigured?: boolean;
+};
 
 export interface SendEmailOptions {
   to: string | string[];
@@ -18,13 +33,19 @@ export interface EmailLogEntry {
   subject: string;
   replyTo?: string;
   from: string;
-  provider: "smtp" | "resend" | "emailjs" | "simulated";
+  provider: "smtp" | "resend" | "emailjs" | "simulated" | "none";
   status: "sent" | "simulated" | "failed";
   timestamp: string;
   error?: string;
 }
 
+/** Recent delivery attempts for diagnostics; bounded so a long-running server does not grow it forever. */
 const recentLogs: EmailLogEntry[] = [];
+const MAX_LOGS = 200;
+const pushLog = (entry: EmailLogEntry) => {
+  recentLogs.push(entry);
+  if (recentLogs.length > MAX_LOGS) recentLogs.splice(0, recentLogs.length - MAX_LOGS);
+};
 
 export function getRecentEmailLogs(limit = 20): EmailLogEntry[] {
   return recentLogs.slice(-limit).reverse();
@@ -41,13 +62,16 @@ export function getEmailServiceStatus() {
       process.env.EMAILJS_PUBLIC_KEY?.trim(),
   );
 
-  const provider: "smtp" | "resend" | "emailjs" | "simulated" = hasSmtp
+  // Without a provider, development logs emails to the console; production sends nothing.
+  const provider: "smtp" | "resend" | "emailjs" | "simulated" | "none" = hasSmtp
     ? "smtp"
     : hasResend
       ? "resend"
       : hasEmailJS
         ? "emailjs"
-        : "simulated";
+        : isProduction()
+          ? "none"
+          : "simulated";
 
   const fromEmail =
     process.env.SMTP_FROM_EMAIL?.trim() ||
@@ -64,7 +88,8 @@ export function getEmailServiceStatus() {
   };
 }
 
-function getAppBaseUrl(): string {
+/** Public base URL for links in emails (CRM_APP_URL). */
+export function getAppBaseUrl(): string {
   return (
     process.env.CRM_APP_URL?.trim() ||
     (process.env.NODE_ENV === "production"
@@ -97,7 +122,7 @@ function emailWrapper({
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title}</title>
+  <title>${esc(title)}</title>
   <style>
     body {
       margin: 0;
@@ -220,7 +245,7 @@ function emailWrapper({
   </style>
 </head>
 <body>
-  <div class="preheader">${preheader}</div>
+  <div class="preheader">${esc(preheader)}</div>
   <div class="wrapper">
     <div class="container">
       <div class="header">
@@ -233,7 +258,7 @@ function emailWrapper({
         ${contentHtml}
       </div>
       <div class="footer">
-        ${replyToNotice ? `<p style="margin: 0 0 8px; color: #94a3b8;">${replyToNotice}</p>` : ""}
+        ${replyToNotice ? `<p style="margin: 0 0 8px; color: #94a3b8;">${esc(replyToNotice)}</p>` : ""}
         <p style="margin: 0;">AutoNeural CRM &bull; Notifications Engine</p>
       </div>
     </div>
@@ -250,8 +275,10 @@ export async function sendEmail({
   replyTo,
   fromName,
   fromEmail,
-}: SendEmailOptions): Promise<{ success: boolean; id?: string; error?: string }> {
+}: SendEmailOptions): Promise<SendResult> {
   const status = getEmailServiceStatus();
+  // Display names go into From headers; quotes, angle brackets and line breaks would break them.
+  fromName = fromName?.replace(/["<>\r\n]/g, "").trim() || undefined;
   const recipients = Array.isArray(to) ? to : [to];
   const plainText = text || stripHtml(html);
   const logId = `mail-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -306,7 +333,7 @@ export async function sendEmail({
         replyTo: effectiveReplyTo || fromEmail || smtpUser,
       });
 
-      recentLogs.push({
+      pushLog({
         id: logId,
         to: recipients,
         subject,
@@ -320,7 +347,7 @@ export async function sendEmail({
       return { success: true, id: logId };
     } catch (err: any) {
       console.error("[EmailService:Hostinger SMTP Error]", err);
-      recentLogs.push({
+      pushLog({
         id: logId,
         to: recipients,
         subject,
@@ -370,7 +397,7 @@ export async function sendEmail({
         throw new Error(response.error.message);
       }
 
-      recentLogs.push({
+      pushLog({
         id: logId,
         to: recipients,
         subject,
@@ -384,7 +411,7 @@ export async function sendEmail({
       return { success: true, id: response.data?.id || logId };
     } catch (err: any) {
       console.error("[EmailService:Resend Error]", err);
-      recentLogs.push({
+      pushLog({
         id: logId,
         to: recipients,
         subject,
@@ -428,7 +455,7 @@ export async function sendEmail({
         throw new Error(`EmailJS API error: ${res.status} ${text}`);
       }
 
-      recentLogs.push({
+      pushLog({
         id: logId,
         to: recipients,
         subject,
@@ -442,7 +469,7 @@ export async function sendEmail({
       return { success: true, id: logId };
     } catch (err: any) {
       console.error("[EmailService:EmailJS Error]", err);
-      recentLogs.push({
+      pushLog({
         id: logId,
         to: recipients,
         subject,
@@ -457,11 +484,27 @@ export async function sendEmail({
     }
   }
 
-  // 3. Fallback / Simulated mode for dev and tests
+  // 3. No provider. Production must never report an unsent email as sent.
+  if (status.provider === "none") {
+    pushLog({
+      id: logId,
+      to: recipients,
+      subject,
+      replyTo,
+      from: fromAddress,
+      provider: "none",
+      status: "failed",
+      error: "No email provider is configured.",
+      timestamp: new Date().toISOString(),
+    });
+    return { success: false, notConfigured: true, error: "No email provider is configured." };
+  }
+
+  // Development and tests: log instead of sending.
   console.log(
     `[EmailService:Simulated] To: ${recipients.join(", ")} | Reply-To: ${replyTo || "none"} | Subject: "${subject}"`,
   );
-  recentLogs.push({
+  pushLog({
     id: logId,
     to: recipients,
     subject,
@@ -472,7 +515,7 @@ export async function sendEmail({
     timestamp: new Date().toISOString(),
   });
 
-  return { success: true, id: logId };
+  return { success: true, simulated: true, id: logId };
 }
 
 // ---------------------------------------------------------------------------
@@ -509,28 +552,28 @@ export function renderTaskAssignedEmail({
         New Task Assigned
       </h1>
       <p style="font-size: 15px; color: #94a3b8; margin: 0; line-height: 1.5;">
-        Hello <strong style="color: #f1f5f9;">${employee.name}</strong>, you have been assigned a new task by <strong style="color: #f1f5f9;">${admin.name}</strong> (${admin.email}).
+        Hello <strong style="color: #f1f5f9;">${esc(employee.name)}</strong>, you have been assigned a new task by <strong style="color: #f1f5f9;">${esc(admin.name)}</strong> (${esc(admin.email)}).
       </p>
     </div>
 
     <div class="card">
       <div class="row">
         <span class="label">Task</span>
-        <span class="value" style="font-size: 15px; font-weight: 600;">${task.title}</span>
+        <span class="value" style="font-size: 15px; font-weight: 600;">${esc(task.title)}</span>
       </div>
       <div class="row">
         <span class="label">Project</span>
-        <span class="value">${task.project || "General Workspace"}</span>
+        <span class="value">${esc(task.project || "General Workspace")}</span>
       </div>
       <div class="row">
         <span class="label">Priority</span>
         <span class="value">
-          <span class="badge ${priorityClass}">${task.priority}</span>
+          <span class="badge ${priorityClass}">${esc(task.priority)}</span>
         </span>
       </div>
       <div class="row">
         <span class="label">Due Date</span>
-        <span class="value" style="color: #fbbf24; font-weight: 600;">${task.dueDate}</span>
+        <span class="value" style="color: #fbbf24; font-weight: 600;">${esc(task.dueDate)}</span>
       </div>
       ${
         task.description
@@ -538,7 +581,7 @@ export function renderTaskAssignedEmail({
         <div style="padding-top: 14px; margin-top: 6px; border-top: 1px solid #1e2230;">
           <span class="label" style="display: block; margin-bottom: 6px;">Description</span>
           <p style="margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.6; white-space: pre-line;">
-            ${task.description}
+            ${esc(task.description)}
           </p>
         </div>`
           : ""
@@ -546,7 +589,7 @@ export function renderTaskAssignedEmail({
     </div>
 
     <div class="button-container">
-      <a href="${taskLink}" class="button" target="_blank">
+      <a href="${esc(taskLink)}" class="button" target="_blank">
         View Task in Workspace &rarr;
       </a>
     </div>
@@ -604,23 +647,23 @@ export function renderTaskCompletedEmail({
         Task Completed
       </h1>
       <p style="font-size: 15px; color: #94a3b8; margin: 0; line-height: 1.5;">
-        Hello <strong style="color: #f1f5f9;">${admin.name}</strong>,
-        <strong style="color: #f1f5f9;">${employee.name}</strong> (${employee.email}) has marked the following task as <strong>Completed</strong>.
+        Hello <strong style="color: #f1f5f9;">${esc(admin.name)}</strong>,
+        <strong style="color: #f1f5f9;">${esc(employee.name)}</strong> (${esc(employee.email)}) has marked the following task as <strong>Completed</strong>.
       </p>
     </div>
 
     <div class="card">
       <div class="row">
         <span class="label">Task</span>
-        <span class="value" style="font-size: 15px; font-weight: 600;">${task.title}</span>
+        <span class="value" style="font-size: 15px; font-weight: 600;">${esc(task.title)}</span>
       </div>
       <div class="row">
         <span class="label">Project</span>
-        <span class="value">${task.project || "General Workspace"}</span>
+        <span class="value">${esc(task.project || "General Workspace")}</span>
       </div>
       <div class="row">
         <span class="label">Completed By</span>
-        <span class="value">${employee.name}</span>
+        <span class="value">${esc(employee.name)}</span>
       </div>
       <div class="row">
         <span class="label">Status</span>
@@ -629,7 +672,7 @@ export function renderTaskCompletedEmail({
     </div>
 
     <div class="button-container">
-      <a href="${taskLink}" class="button" target="_blank">
+      <a href="${esc(taskLink)}" class="button" target="_blank">
         Review Completed Task &rarr;
       </a>
     </div>
@@ -683,22 +726,22 @@ export function renderTaskCommentEmail({
         New Comment on Task
       </h1>
       <p style="font-size: 14px; color: #94a3b8; margin: 0; line-height: 1.5;">
-        Hello <strong style="color: #f1f5f9;">${recipient.name}</strong>,
-        <strong style="color: #f1f5f9;">${author.name}</strong> (${author.email}) posted a comment on <strong style="color: #f1f5f9;">${task.title}</strong>:
+        Hello <strong style="color: #f1f5f9;">${esc(recipient.name)}</strong>,
+        <strong style="color: #f1f5f9;">${esc(author.name)}</strong> (${esc(author.email)}) posted a comment on <strong style="color: #f1f5f9;">${esc(task.title)}</strong>:
       </p>
     </div>
 
     <div class="card" style="border-left: 3px solid #6366f1; background: #131622;">
       <div style="font-size: 14px; color: #e2e8f0; line-height: 1.6; white-space: pre-line; font-style: italic;">
-        "${commentText}"
+        "${esc(commentText)}"
       </div>
       <div style="margin-top: 12px; font-size: 12px; color: #64748b; text-align: right;">
-        &mdash; ${author.name}
+        &mdash; ${esc(author.name)}
       </div>
     </div>
 
     <div class="button-container">
-      <a href="${taskLink}" class="button" target="_blank">
+      <a href="${esc(taskLink)}" class="button" target="_blank">
         View Comment &amp; Reply &rarr;
       </a>
     </div>
@@ -834,11 +877,11 @@ export async function sendTestEmail(targetEmail: string) {
       </div>
       <div class="row">
         <span class="label">Sender</span>
-        <span class="value">${getEmailServiceStatus().fromEmail}</span>
+        <span class="value">${esc(getEmailServiceStatus().fromEmail)}</span>
       </div>
       <div class="row">
         <span class="label">Workspace URL</span>
-        <span class="value">${appUrl}</span>
+        <span class="value">${esc(appUrl)}</span>
       </div>
     </div>
   `;
@@ -857,6 +900,45 @@ export async function sendTestEmail(targetEmail: string) {
   });
 }
 
+/** Temporary password after an admin approved a reset. Sent only to the account owner. */
+export function renderTemporaryPasswordEmail({ name, password, appUrl }: { name: string; password: string; appUrl: string }) {
+  const subject = "Your temporary AutoNeural password";
+  const contentHtml = `
+    <h1 style="font-size: 20px; font-weight: 700; color: #ffffff; margin: 0 0 12px;">Your password was reset</h1>
+    <p style="font-size: 14px; color: #cbd5e1; line-height: 1.6; margin: 0 0 16px;">
+      Hello <strong style="color: #f1f5f9;">${esc(name)}</strong>, an administrator approved your password reset request.
+      Sign in with this temporary password; you will be asked to choose a new one straight away.
+    </p>
+    <div class="card" style="text-align: center; font-family: monospace; font-size: 18px; letter-spacing: 1px; color: #ffffff;">${esc(password)}</div>
+    <div class="button-container"><a href="${esc(`${appUrl}/login`)}" class="button" target="_blank">Sign in &rarr;</a></div>
+    <p style="font-size: 12px; color: #94a3b8; margin: 16px 0 0;">If you did not ask for this, tell your administrator right away.</p>
+  `;
+  return {
+    subject,
+    html: emailWrapper({ title: subject, preheader: "An administrator approved your password reset.", contentHtml }),
+    text: `Hello ${name},\n\nAn administrator approved your password reset request. Sign in at ${appUrl}/login with this temporary password; you will be asked to choose a new one:\n\n${password}\n\nIf you did not ask for this, tell your administrator right away.`,
+  };
+}
+
+/** Tells an admin that someone is waiting for a password reset approval. */
+export function renderResetRequestedEmail({ name, email, appUrl }: { name: string; email: string; appUrl: string }) {
+  const subject = `Password reset requested: ${name}`;
+  const link = `${appUrl}/?page=Team`;
+  const contentHtml = `
+    <h1 style="font-size: 20px; font-weight: 700; color: #ffffff; margin: 0 0 12px;">Password reset waiting for approval</h1>
+    <p style="font-size: 14px; color: #cbd5e1; line-height: 1.6; margin: 0;">
+      <strong style="color: #f1f5f9;">${esc(name)}</strong> (${esc(email)}) asked for a password reset from the sign-in page.
+      Nothing changes until an administrator approves it. If they did not ask, reject it.
+    </p>
+    <div class="button-container"><a href="${esc(link)}" class="button" target="_blank">Review in Team &rarr;</a></div>
+  `;
+  return {
+    subject,
+    html: emailWrapper({ title: subject, preheader: `${name} is waiting for a password reset.`, contentHtml }),
+    text: `${name} (${email}) asked for a password reset from the sign-in page. Nothing changes until an administrator approves it. Review it in Team: ${link}`,
+  };
+}
+
 export function renderDirectEmail({
   sender,
   subject,
@@ -873,24 +955,24 @@ export function renderDirectEmail({
   const contentHtml = `
     <div style="margin-bottom: 24px;">
       <h1 style="font-size: 20px; font-weight: 700; color: #ffffff; margin: 0 0 8px;">
-        ${subject}
+        ${esc(subject)}
       </h1>
       <p style="font-size: 13px; color: #94a3b8; margin: 0;">
-        From <strong style="color: #f1f5f9;">${sender.name}</strong> (${sender.email})
-        ${sender.designation ? ` &bull; ${sender.designation}` : ""}
+        From <strong style="color: #f1f5f9;">${esc(sender.name)}</strong> (${esc(sender.email)})
+        ${sender.designation ? ` &bull; ${esc(sender.designation)}` : ""}
       </p>
     </div>
 
     <div class="card" style="background: #141722; border: 1px solid #1e2230; padding: 24px; font-size: 14px; line-height: 1.7; color: #f1f5f9; white-space: pre-line;">
-${message}
+${esc(message)}
     </div>
 
     ${
       taskLink && taskTitle
         ? `
       <div style="background: #10131d; border: 1px solid #1e2230; border-radius: 8px; padding: 16px; margin: 20px 0; text-align: center;">
-        <span style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 8px;">Referenced Task: <strong>${taskTitle}</strong></span>
-        <a href="${taskLink}" class="button" target="_blank" style="display: inline-block; font-size: 13px; padding: 8px 20px;">
+        <span style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 8px;">Referenced Task: <strong>${esc(taskTitle)}</strong></span>
+        <a href="${esc(taskLink)}" class="button" target="_blank" style="display: inline-block; font-size: 13px; padding: 8px 20px;">
           Open Task in Workspace &rarr;
         </a>
       </div>`
@@ -898,8 +980,8 @@ ${message}
     }
 
     <div style="margin-top: 28px; padding-top: 20px; border-top: 1px solid #1e2230; font-size: 13px; color: #94a3b8;">
-      <p style="margin: 0 0 4px; font-weight: 600; color: #f1f5f9;">${sender.name}</p>
-      <p style="margin: 0; color: #64748b; font-size: 12px;">${sender.designation || "AutoNeural Team"} &bull; <a href="mailto:${sender.email}" style="color: #818cf8; text-decoration: none;">${sender.email}</a></p>
+      <p style="margin: 0 0 4px; font-weight: 600; color: #f1f5f9;">${esc(sender.name)}</p>
+      <p style="margin: 0; color: #64748b; font-size: 12px;">${esc(sender.designation || "AutoNeural Team")} &bull; <a href="mailto:${esc(sender.email)}" style="color: #818cf8; text-decoration: none;">${esc(sender.email)}</a></p>
     </div>
   `;
 

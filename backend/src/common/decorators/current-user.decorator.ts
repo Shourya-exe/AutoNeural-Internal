@@ -6,6 +6,7 @@ export interface AuthenticatedUser {
   email: string;
   name: string;
   role: 'ADMIN' | 'EMPLOYEE';
+  isPlatformAdmin?: boolean;
 }
 
 export const CurrentUser = createParamDecorator(

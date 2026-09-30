@@ -100,6 +100,11 @@ model Organization {
   users           User[]
   tasks           Task[]
   removalRequests EmployeeRemovalRequest[]
+  accounts        Account[]
+  contacts        Contact[]
+  dealStages      DealStage[]
+  deals           Deal[]
+  crmActivities   CrmActivity[]
 
   @@map("organizations")
 }
@@ -117,6 +122,9 @@ model User {
   jobTitle           String?
   avatarUrl          String?
   mustChangePassword Boolean       @default(false)
+  /// Global (platform) master admin: passes every role check and cannot be demoted, deactivated or removed.
+  /// Only ever set by migration/seed, never from user input or by email match.
+  isPlatformAdmin    Boolean       @default(false)
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
@@ -130,6 +138,11 @@ model User {
   createdRemovalRequests  EmployeeRemovalRequest[] @relation("RemovalRequester")
   reviewedRemovalRequests EmployeeRemovalRequest[] @relation("RemovalReviewer")
   taskAttachments         TaskAttachment[]
+  ownedAccounts           Account[]                @relation("AccountOwner")
+  ownedContacts           Contact[]                @relation("ContactOwner")
+  ownedDeals              Deal[]                   @relation("DealOwner")
+  ownedCrmActivities      CrmActivity[]            @relation("CrmActivityOwner")
+  createdCrmActivities    CrmActivity[]            @relation("CrmActivityCreator")
 
   @@unique([organizationId, email])
   @@index([email])
@@ -287,3 +300,157 @@ model TaskAttachment {
   @@map("task_attachments")
 }
 
+
+// ─── CRM (Business OS phase 1: sales execution) ─────────────────────────────
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  CUSTOMER
+}
+
+enum LeadSource {
+  MANUAL
+  WEBSITE
+  FACEBOOK
+  WHATSAPP
+  CALL
+  REFERRAL
+  IMPORT
+  OTHER
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum CrmActivityType {
+  NOTE
+  CALL
+  WHATSAPP
+  EMAIL
+  MEETING
+  FOLLOW_UP
+  SYSTEM
+}
+
+model Account {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ownerId        String?
+  owner          User?        @relation("AccountOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  name           String
+  gstin          String?
+  industry       String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  contacts Contact[]
+  deals    Deal[]
+
+  @@index([organizationId, name])
+  @@map("accounts")
+}
+
+// A contact is a lead until it becomes a CUSTOMER; lead status is separate from deal stage.
+model Contact {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  accountId      String?
+  account        Account?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  ownerId        String?
+  owner          User?        @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  name           String
+  phone          String?
+  email          String?
+  source         LeadSource   @default(MANUAL)
+  leadStatus     LeadStatus   @default(NEW)
+  lostReason     String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  deals      Deal[]
+  activities CrmActivity[]
+
+  @@index([organizationId, phone])
+  @@index([organizationId, email])
+  @@index([organizationId, ownerId, leadStatus])
+  @@map("contacts")
+}
+
+model DealStage {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  position       Int
+  probability    Int          @default(0)
+
+  deals Deal[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, position])
+  @@map("deal_stages")
+}
+
+model Deal {
+  id                String       @id @default(uuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contactId         String
+  contact           Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  accountId         String?
+  account           Account?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  stageId           String
+  stage             DealStage    @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  ownerId           String?
+  owner             User?        @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  title             String
+  value             Decimal      @default(0) @db.Decimal(14, 2)
+  status            DealStatus   @default(OPEN)
+  expectedCloseDate DateTime?
+  closedAt          DateTime?
+  lostReason        String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  activities CrmActivity[]
+
+  @@index([organizationId, status, stageId])
+  @@index([organizationId, ownerId])
+  @@index([contactId])
+  @@map("deals")
+}
+
+// One table for the customer timeline: logged calls/messages/meetings/notes,
+// follow-ups (dueAt set, completedAt null = pending) and SYSTEM change events.
+model CrmActivity {
+  id             String          @id @default(uuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contactId      String
+  contact        Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  dealId         String?
+  deal           Deal?           @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  ownerId        String?
+  owner          User?           @relation("CrmActivityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdById    String
+  createdBy      User            @relation("CrmActivityCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  type           CrmActivityType
+  subject        String
+  notes          String?
+  outcome        String?
+  dueAt          DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+
+  @@index([contactId, createdAt])
+  @@index([organizationId, ownerId, completedAt, dueAt])
+  @@map("crm_activities")
+}

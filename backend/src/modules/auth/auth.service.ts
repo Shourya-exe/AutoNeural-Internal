@@ -4,11 +4,14 @@ import {
   BadRequestException,
   NotFoundException,
   ConflictException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmailService } from '../email/email.service';
+import { jwtSecret } from '../../common/config/secrets';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -25,13 +28,28 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
   ) {}
 
   private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
   }
 
+  /** Reset tokens use their own key so they can never pass as access tokens. */
+  private resetSecret() {
+    return crypto.createHmac('sha256', jwtSecret(this.configService, 'JWT_ACCESS_SECRET')).update('password-reset').digest('hex');
+  }
+
+  /** Binds a reset token to the current password, so it stops working once used. */
+  private passwordFingerprint(passwordHash: string) {
+    return crypto.createHash('sha256').update(passwordHash).digest('hex').slice(0, 16);
+  }
+
   async register(dto: RegisterDto) {
+    // Creating a new organization is an operator decision, not a public sign-up form.
+    if (this.configService.get<string>('ALLOW_PUBLIC_REGISTRATION') !== 'true') {
+      throw new ForbiddenException('Registration is disabled.');
+    }
     const existingOrg = await this.prisma.organization.findUnique({
       where: { slug: dto.organizationSlug.toLowerCase() },
     });
@@ -101,8 +119,8 @@ export class AuthService {
 
   async refreshToken(refreshToken: string) {
     try {
-      const payload = this.jwtService.verify(refreshToken, {
-        secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'autoneural-jwt-refresh-secret-fallback',
+      this.jwtService.verify(refreshToken, {
+        secret: jwtSecret(this.configService, 'JWT_REFRESH_SECRET'),
       });
 
       const tokenHash = this.hashToken(refreshToken);
@@ -129,7 +147,7 @@ export class AuthService {
       return tokens;
     } catch (err: any) {
       this.logger.warn(`Refresh token failure: ${err?.message || err}`);
-      throw new UnauthorizedException(err?.message || 'Invalid or expired refresh token');
+      throw new UnauthorizedException('Invalid or expired refresh token');
     }
   }
 
@@ -184,49 +202,54 @@ export class AuthService {
     return { success: true, message: 'Password changed successfully. Please log in again.' };
   }
 
+  /**
+   * Emails a one-hour, single-use reset link. The response is identical whether or not the
+   * account exists, and the token is never returned or logged: only the mailbox owner can use it.
+   */
   async forgotPassword(email: string) {
+    const neutral = {
+      success: true,
+      message: 'If an account exists with that email, a password reset link has been sent to it.',
+    };
     const user = await this.prisma.user.findFirst({
       where: { email: email.toLowerCase().trim() },
     });
-
-    if (!user) {
-      // Return neutral message to prevent user enumeration
-      return {
-        success: true,
-        message: 'If an account exists with that email, password reset instructions have been generated.',
-      };
-    }
+    if (!user || user.status === AccountStatus.INACTIVE) return neutral;
 
     const resetToken = this.jwtService.sign(
-      { sub: user.id, email: user.email, purpose: 'password_reset' },
-      {
-        secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
-        expiresIn: '1h',
-      },
+      { sub: user.id, purpose: 'password_reset', pwd: this.passwordFingerprint(user.passwordHash) },
+      { secret: this.resetSecret(), expiresIn: '1h' },
     );
-
-    this.logger.log(`Password reset requested for ${user.email}. Token: ${resetToken}`);
-
-    return {
-      success: true,
-      message: 'Password reset token generated.',
-      resetToken, // Provided in development response for easy testing
-    };
+    const base = (
+      this.configService.get<string>('PASSWORD_RESET_URL')?.trim() ||
+      `${(this.configService.get<string>('FRONTEND_URL') ?? '').split(',')[0].trim().replace(/\/+$/, '')}/reset-password`
+    );
+    const link = `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(resetToken)}`;
+    const result = await this.emailService.sendEmail({
+      to: user.email,
+      subject: 'Reset your AutoNeural password',
+      html: `<p>Hello,</p><p>Someone asked to reset the password for this account. If it was you, open the link below within one hour. It works once.</p><p><a href="${link.replace(/"/g, '&quot;')}">Reset my password</a></p><p>If you did not ask for this, ignore this email; your password is unchanged.</p>`,
+      text: `Someone asked to reset the password for this account. If it was you, open this link within one hour (it works once):\n${link}\n\nIf you did not ask for this, ignore this email.`,
+    });
+    if (!result.success) this.logger.error(`Password reset email to user ${user.id} failed: ${result.error}`);
+    else this.logger.log(`Password reset link sent to user ${user.id}`);
+    return neutral;
   }
 
   async resetPassword(dto: ResetPasswordDto) {
     try {
-      const payload = this.jwtService.verify(dto.token, {
-        secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
-      });
+      const payload = this.jwtService.verify(dto.token, { secret: this.resetSecret() });
 
       if (payload.purpose !== 'password_reset') {
         throw new BadRequestException('Invalid token purpose');
       }
 
       const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
-      if (!user) {
+      if (!user || user.status === AccountStatus.INACTIVE) {
         throw new NotFoundException('User not found');
+      }
+      if (payload.pwd !== this.passwordFingerprint(user.passwordHash)) {
+        throw new BadRequestException('This reset link has already been used.');
       }
 
       const newHash = await bcrypt.hash(dto.newPassword, 12);
@@ -260,7 +283,7 @@ export class AuthService {
     };
 
     const accessToken = this.jwtService.sign(payload, {
-      secret: this.configService.get<string>('JWT_ACCESS_SECRET') || 'autoneural-jwt-access-secret-fallback',
+      secret: jwtSecret(this.configService, 'JWT_ACCESS_SECRET'),
       expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') || '15m',
     });
 
@@ -273,7 +296,7 @@ export class AuthService {
     };
 
     const refreshToken = this.jwtService.sign(refreshPayload, {
-      secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'autoneural-jwt-refresh-secret-fallback',
+      secret: jwtSecret(this.configService, 'JWT_REFRESH_SECRET'),
       expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') || '7d',
     });
 

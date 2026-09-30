@@ -17,4 +17,4 @@ writeFileSync(
   ].join("\n"),
   { mode: 0o600, flag: "wx" },
 );
-console.log(`Created five accounts. Private login details saved to ${path}`);
+console.log(`Created ${accounts.length} account(s). Private login details saved to ${path}`);

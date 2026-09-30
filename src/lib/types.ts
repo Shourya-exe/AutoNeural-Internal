@@ -4,7 +4,41 @@ export const statuses = [
   "In review",
   "Completed",
 ] as const;
+/** The one master admin: always active, always admin, cannot be removed, demoted or reset by other admins. */
+export const MASTER_ADMIN_EMAIL = "info@autoneural.in";
+export const isMasterAdmin = (u: { email: string } | null | undefined) =>
+  u?.email.toLowerCase() === MASTER_ADMIN_EMAIL;
 export const priorities = ["Low", "Medium", "High", "Urgent"] as const;
+/** File types accepted for task attachments: extension → content type served on download. */
+export const ATTACHMENT_TYPES: Record<string, string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  odp: "application/vnd.oasis.opendocument.presentation",
+  rtf: "application/rtf",
+  csv: "text/csv",
+  txt: "text/plain",
+  md: "text/markdown",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  heic: "image/heic",
+  zip: "application/zip",
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+};
+/** For <input type="file" accept>. */
+export const ATTACHMENT_ACCEPT = Object.keys(ATTACHMENT_TYPES).map((e) => `.${e}`).join(",");
 export type Status = (typeof statuses)[number];
 export type Priority = (typeof priorities)[number];
 export type User = {
@@ -21,6 +55,7 @@ export type TaskAttachment = {
   taskId: string;
   name: string;
   type: "FILE" | "DOCUMENT" | "LINK";
+  /** Links: the external URL. Files: /api/attachments/<id>; "#" for files recorded before uploads were stored. */
   url: string;
   fileSize?: number;
   purpose: "REFERENCE" | "OUTPUT" | "FOR_APPROVAL";
@@ -66,6 +101,18 @@ export type RemovalRequest = {
   reason?: string | null;
   createdAt: string;
 };
+/** A password reset someone asked for on the sign-in page, waiting for an admin. */
+export type PasswordResetRequest = {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  role: "admin" | "employee";
+  requestedAt: string;
+  ip: string | null;
+  /** False when only the master admin may approve it. */
+  canApprove: boolean;
+};
 export type AuthLog = {
   id: string;
   userId?: string | null;
@@ -103,11 +150,14 @@ export type WorkspaceData = {
   tasks: Task[];
   activity: Activity[];
   removalRequests?: RemovalRequest[];
+  passwordResets?: PasswordResetRequest[];
   authLogs?: AuthLog[];
   emails?: EmailMessage[];
   unreadEmailCount?: number;
+  /** Largest task attachment the server accepts, in MB. */
+  uploadLimitMb: number;
   emailStatus?: {
-    provider: "smtp" | "resend" | "emailjs" | "simulated";
+    provider: "smtp" | "resend" | "emailjs" | "simulated" | "none";
     configured: boolean;
     fromEmail: string;
   };

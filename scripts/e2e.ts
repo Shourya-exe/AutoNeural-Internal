@@ -4,12 +4,22 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import assert from "node:assert/strict";
 import { chromium, type Page } from "@playwright/test";
-import { setupAccounts, allUsers, db, createTask } from "../src/lib/store";
+import { setupAccounts, allUsers, db, createTask, createEmployee } from "../src/lib/store";
 const directory = mkdtempSync(join(tmpdir(), "autoneural-e2e-"));
 process.env.CRM_DATABASE_PATH = join(directory, "crm.sqlite");
 const accounts = setupAccounts();
+const admin = allUsers().find((u) => u.role === "admin")!;
+// Test team, in the isolated database only.
+for (const [name, local] of [
+  ["Manyu", "manyu"],
+  ["Rajashi", "rajashi"],
+  ["Shourya", "shourya"],
+  ["Warrior Biswas", "warriorbiswas"],
+]) {
+  const created = createEmployee(admin, { name, email: `${local}@autoneural.in` });
+  accounts.push({ email: created.email, role: created.role, password: created.initialPassword });
+}
 const users = allUsers();
-const admin = users.find((u) => u.role === "admin")!;
 const base = "http://127.0.0.1:3219";
 let server: ChildProcess | undefined,
   output = "";
@@ -182,6 +192,44 @@ async function main() {
       ).comments[0].text,
       "Checklist drafted and ready for the admin to review.",
     );
+    // Real file upload through the task's Attachments tab, then download it back.
+    await employee.goto(base + `/?task=${task.id}`); // deep links from notification emails open the task
+    const detail = employee.getByRole("dialog");
+    await detail.getByRole("button", { name: /Attachments & Deliverables/ }).first().click();
+    await detail.locator('input[type="file"]').setInputFiles({
+      name: "checklist.pdf",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\n% onboarding checklist\n"),
+    });
+    await detail.getByRole("button", { name: "Upload Document" }).click();
+    await employee.getByText("File uploaded.", { exact: true }).waitFor();
+    const link = detail.getByRole("link", { name: /checklist\.pdf/ });
+    await link.waitFor();
+    const href = await link.getAttribute("href");
+    assert.match(href ?? "", /^\/api\/attachments\/[0-9a-f-]{36}$/);
+    const download = await employee.request.get(base + href);
+    assert.equal(download.status(), 200);
+    assert.equal(download.headers()["content-type"], "application/pdf");
+    assert.ok((await download.body()).toString("latin1").startsWith("%PDF-1.4"));
+    assert.equal((await page.request.get(base + href)).status(), 200, "the admin can open it too");
+    await employee.getByRole("button", { name: "Close dialog" }).click();
+
+    // Mail between workspace members is delivered even with no email provider configured.
+    await employee.getByRole("button", { name: /^Mail(\s\d+)?$/ }).first().click();
+    await employee.getByRole("button", { name: "Compose email", exact: true }).click();
+    const compose = employee.getByRole("dialog");
+    await compose.getByPlaceholder("recipient@autoneural.in or any external email").fill("info@autoneural.in");
+    await compose.getByPlaceholder("Subject line").fill("Checklist ready");
+    await compose.getByPlaceholder("Write your email here...").fill("The onboarding checklist is attached to the task.");
+    await compose.getByRole("button", { name: "Send Email" }).click();
+    await employee.getByText(/workspace inbox only/).waitFor();
+    const inbox = await (await page.request.get(base + "/api/workspace?mailFolder=inbox")).json();
+    assert.ok(inbox.emails.some((m: { subject: string }) => m.subject === "Checklist ready"));
+
+    const health = await (await page.request.get(base + "/api/health")).json();
+    assert.equal(health.status, "ok");
+    await employee.getByRole("button", { name: "Overview", exact: true }).click();
+
     const other = users.find((u) => u.email === "rajashi@autoneural.in")!;
     const otherTask = createTask(admin, {
       title: "Review the website copy",
@@ -320,9 +368,30 @@ async function main() {
       (await employee.request.get(base + "/api/workspace")).status(),
       401,
     );
+    // Forgot password → an admin approves → sign in with the temporary password.
+    await employee.getByRole("button", { name: "Forgot your password?" }).click();
+    await employee.getByLabel("Work email").fill("manyu@autoneural.in");
+    await employee.getByRole("button", { name: "Request password reset" }).click();
+    await employee.getByRole("status").waitFor();
+    await employee.screenshot({ path: join(outputDir, "login-reset-requested.png") });
+    await page.setViewportSize({ width: 1512, height: 1000 });
+    await page.reload();
+    await page.getByRole("button", { name: /^Team( \d+)?$/ }).click();
+    await page.getByText("Password reset requests").waitFor();
+    await page.screenshot({ path: join(outputDir, "team-reset-requests.png") });
+    await page.getByRole("button", { name: "Approve reset" }).click();
+    const temporary = (await page.locator(".temporary-password").textContent())?.trim() ?? "";
+    assert.ok(temporary.length >= 12, "admin sees the temporary password when email is not configured");
+    await page.getByRole("button", { name: "Close dialog" }).click();
+    await employee.getByRole("button", { name: "Back to sign in" }).click();
+    await employee.getByLabel("Work email").fill("manyu@autoneural.in");
+    await employee.getByLabel("Password", { exact: true }).fill(temporary);
+    await employee.getByRole("button", { name: "Sign in to workspace" }).click();
+    await employee.getByText("Make this account yours.").waitFor();
+
     assert.deepEqual(errors, [], "No browser runtime errors");
     console.log(
-      "PASS: first-login password change, task creation, employee isolation, comments, completion, persistence, admin visibility, list/board/team navigation, mobile layout, CSRF checks, logout, and no browser errors.",
+      "PASS: first-login password change, task creation, employee isolation, comments, completion, persistence, task deep link, file upload + download, workspace mail, health check, admin-approved password reset, admin visibility, list/board/team navigation, mobile layout, CSRF checks, logout, and no browser errors.",
     );
     console.log(
       "Screenshots saved to output/crm-preview (isolated sample data).",

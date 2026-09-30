@@ -4,6 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AccountStatus } from '@prisma/client';
+import { jwtSecret } from '../../../common/config/secrets';
 
 export interface JwtPayload {
   sub: string;
@@ -21,7 +22,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_ACCESS_SECRET') || 'autoneural-jwt-access-secret-fallback',
+      secretOrKey: jwtSecret(configService, 'JWT_ACCESS_SECRET'),
     });
   }
 
@@ -45,6 +46,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       name: user.name,
       role: user.role,
       mustChangePassword: user.mustChangePassword,
+      isPlatformAdmin: user.isPlatformAdmin,
     };
   }
 }

@@ -35,9 +35,12 @@ We have pre-built and packaged the complete production application and backend i
    - **Submission & Approval Workflow**: Mark attachments as "For Approval" or "Output"; Admin Approve / Request Changes buttons with feedback notes.
    - **Dual-Admin Employee Removal**: Removal requires request by one admin and independent approval by the second admin.
    - **Team Member Provisioning**: Add employee dialog with manual company domain emails, designations, and roles.
-   - **Admin Privileges**: `shourya@autoneural.in` assigned as Administrator with "Technical Lead" designation.
-3. **Embedded `backend/` Directory**: Full NestJS enterprise API codebase, compiled `dist/`, Prisma schema, and migrations.
-4. **Pre-configured SQLite DB Snapshot**: Located in `data/autoneural-crm.sqlite`.
+   - **Admin Privileges**: `info@autoneural.in` is the master admin.
+3. **No source code or database**: the ZIP contains only the compiled app. The NestJS API (`backend/`) is deployed separately. A database is included only when packaged with `--include-db`.
+4. **Protected document root**: the generated `.htaccess` blocks web access to `data/`, `.env*`, SQLite files and server internals.
+
+> [!IMPORTANT]
+> **First deployment on an empty server**: there is no built-in admin password. Add `CRM_ADMIN_BOOTSTRAP_PASSWORD=<12+ characters>` to `.env.production`, restart, sign in as `info@autoneural.in` with it, choose a new password, then remove the variable. Uploaded task files are stored in `data/uploads` next to the database; back up both. Check `https://<subdomain>.autoneural.in/api/health` after each deploy.
 
 ---
 
@@ -69,9 +72,8 @@ We have pre-built and packaged the complete production application and backend i
 4. **Verify All Features Live**:
    - Visit **`https://work.autoneural.in`** (use an Incognito tab to bypass browser caching).
    - Sign in with:
-     - Admin: `shourya@autoneural.in` (Technical Lead, full admin privileges)
-     - Admin: `info@autoneural.in`
-     - Employees: `manyu@autoneural.in`, `rajashi@autoneural.in`, `warriorbiswas@autoneural.in`
+     - Master admin: `info@autoneural.in`
+     - Employees: `shourya@autoneural.in`, `manyu@autoneural.in`, `rajashi@autoneural.in`, `warriorbiswas@autoneural.in`
    - Test the new features:
      - Open any task → Click **Attach document, file or link** → upload a file or submit for approval.
      - Go to **Team** tab → Click **+ Add team member** → enter manual domain email and designation.
@@ -161,7 +163,7 @@ To ensure automatic daily snapshots of the database:
    ```bash
    /bin/bash /home/u294542559/autoneural-crm/backup.sh autoneural-crm
    ```
-5. Click **Save**. Daily snapshots are stored in `~/autoneural-crm/backups/` (the last 30 snapshots are automatically retained).
+5. Click **Save**. Daily database snapshots are stored in `~/autoneural-crm/backups/` (the last 30 are kept), together with an archive of uploaded files (`uploads-*.tar.gz`, the last 7 are kept).
 
 ---
 
@@ -260,3 +262,61 @@ The updated deployment ZIPs (`autoneural-work-deployment.zip` and `autoneural-ho
 1. Include `src/` (so `src/app` exists for directory structure checks).
 2. Set `"build"` in `package.json` to complete instantly (`node -e "console.log(...)"`) because standalone production output is already pre-compiled locally.
 3. Set `"start"` to `node passenger.js` so Hostinger's start command launches the standalone server.
+
+## Automatic leads
+
+Leads land in **Leads** (sidebar) and each one becomes a High-priority "Call …" task for the next salesperson.
+Connect sources as the admin under Leads → Automatic lead sources:
+
+- **Website form / Zapier / Make / Meta Lead Ads** — create a key, then post to `https://work.autoneural.in/api/leads/intake`
+  (Bearer key for tools; hidden `key` field for a plain HTML form — the page shows a ready-to-paste form).
+- **Google Sheets / CSV** — paste a link shared as "Anyone with the link can view"; checked every 2 minutes.
+- **IndiaMART** — paste the CRM API key from Lead Manager → CRM Integration; checked every 10 minutes.
+
+The server pulls Sheets and IndiaMART every minute while it runs. Hostinger can idle-stop the app, so add a cron job
+(hPanel → Advanced → Cron Jobs, every 5 minutes):
+
+    curl -s https://work.autoneural.in/api/leads/intake > /dev/null
+
+## AI calling agent (Riya)
+
+`voice-agent/` holds the LiveKit worker from AUTONEURAL CRM, unchanged (`agent.py`, `voice_config.py`).
+The workspace dispatches it from **AI Calls** or the **AI call** button on a lead; finished calls are posted to
+`/api/agent/calls` and logged on the lead's task. Settings (same names as the CRM): `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+`LIVEKIT_API_SECRET`, `DEEPGRAM_API_KEY`, `LLM_PROVIDER` + Gemini/Groq/OpenAI keys, `SARVAM_API_KEY`, `OUTBOUND_TRUNK_ID`,
+`VOBIZ_OUTBOUND_NUMBER`, `VOBIZ_SIP_DOMAIN`, `DEFAULT_TRANSFER_NUMBER`, `AGENT_NAME`, `AGENT_INGEST_SECRET`,
+and `CRM_URL` (this app's URL, where the agent posts calls).
+
+Local: `python3.12 -m venv voice-agent/.venv && voice-agent/.venv/bin/pip install -r voice-agent/requirements.txt`,
+then **AI Calls → Start agent**.
+
+Hostinger shared hosting cannot run the Python worker. Run it on an always-on server (VPS) with the same settings and
+`CRM_URL=https://work.autoneural.in`, and set `AGENT_EXTERNAL=true` on the web app. Only run ONE worker per `AGENT_NAME`:
+LiveKit hands each call to any worker registered under that name.
+
+## Sales & People modules (DigiSME parity)
+
+Optional settings — each feature works without them and says what is missing:
+
+| Setting | Enables |
+| --- | --- |
+| `GOOGLE_API_KEY` (+ `_2`), `AI_MODEL` | AI guidance, AI email drafts, "Ask your business" (Gemini; defaults to `gemini-3.5-flash`) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | Razorpay payment links; webhook `…/api/payments/razorpay` (event `payment_link.paid`) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe checkout links; webhook `…/api/payments/stripe` (event `checkout.session.completed`) |
+| `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET` | Zoom meetings (Server-to-Server OAuth app). Without them meetings use a free video link. |
+| `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_API_VERSION` | WhatsApp template campaigns (Meta Cloud API) |
+
+UPI QR codes on invoices need only the UPI ID under Quotes & Invoices → Company details.
+Lead sources: Google Ads lead forms → webhook URL `…/api/leads/intake`, key = the intake key;
+JustDial and similar push portals → `…/api/leads/intake?key=KEY` (GET or POST);
+TradeIndia / ExportersIndia → paste their inquiry-API link as a "sheet" feed (JSON is detected).
+
+## WhatsApp inbox, AI agent, automations, calling, usage (MVP gaps)
+
+| Setting | Enables |
+| --- | --- |
+| `WHATSAPP_APP_SECRET` (**required** — the webhook rejects everything without it), `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | Shared inbox. Meta → WhatsApp → Configuration → Webhook: `…/api/whatsapp/webhook`, field `messages`. |
+| `EXOTEL_SID`, `EXOTEL_API_KEY`, `EXOTEL_API_TOKEN`, `EXOTEL_CALLER_ID` (+ `EXOTEL_SUBDOMAIN`, default `api.in.exotel.com`) | "Call via company number" click-to-call with recording; status callback is set automatically. Each salesperson's mobile goes in People → Employees. |
+
+AI WhatsApp agent: Inbox → ⚙ (admin) — write the approved knowledge, then enable. Automations: admin → Automations.
+Rates and monthly AI/voice budgets: Admin → Usage. Everything sensitive is recorded under Admin → Audit.

@@ -87,7 +87,7 @@ All accounts are seeded with the default password: **`Password123!`**
 | Role | Name | Email | Department / Designation |
 |---|---|---|---|
 | **Admin** | AutoNeural Admin | `info@autoneural.in` | Management / System Administrator |
-| **Admin** | Shourya Kumar | `shourya@autoneural.in` | Engineering / **Technical Lead** |
+| Employee | Shourya Kumar | `shourya@autoneural.in` | Engineering / Technical Lead |
 
 ---
 

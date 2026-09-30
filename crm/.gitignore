@@ -1,0 +1,45 @@
+node_modules
+.next
+out
+build
+dist
+coverage
+
+# env — the *.example templates ARE committed; filled-in copies never are
+.env
+.env.local
+.env.production
+.env.*.local
+!.env.example
+!.env.production.example
+
+# prisma
+prisma/*.db
+prisma/*.db-journal
+prisma/migrations/dev.db*
+
+# local embedded PostgreSQL data (npm run db:local)
+.localdb/
+
+# uploaded attachments (served through an access-checked route, never public)
+.uploads/
+
+# pm2 logs
+logs/
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# python venv for voice agent
+.venv-agent/
+
+# service account keys
+service-account.json
+
+# deployment secrets/credentials (scripts/deploy)
+.deploy/

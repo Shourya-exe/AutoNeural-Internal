@@ -22,6 +22,11 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('User is not authenticated');
     }
 
+    // The global master admin satisfies every role requirement.
+    if (user.isPlatformAdmin) {
+      return true;
+    }
+
     const hasRole = requiredRoles.includes(user.role);
     if (!hasRole) {
       throw new ForbiddenException(

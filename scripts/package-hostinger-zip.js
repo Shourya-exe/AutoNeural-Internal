@@ -40,23 +40,11 @@ const stageDir = path.join(rootDir, "tmp", "hostinger-deploy");
 
 if (!skipBuild) {
   console.log("→ Building standalone production application (NEXT_OUTPUT=standalone)...");
-  execSync("npm run build", {
+  execSync("npx next build", {
     cwd: rootDir,
     env: { ...process.env, NEXT_OUTPUT: "standalone" },
     stdio: "inherit",
   });
-
-  const backendPkg = path.join(rootDir, "backend", "package.json");
-  if (fs.existsSync(backendPkg)) {
-    console.log("→ Generating Prisma client and compiling NestJS backend...");
-    try {
-      execSync("npx prisma generate", { cwd: path.join(rootDir, "backend"), stdio: "inherit" });
-      execSync("npm run build", { cwd: path.join(rootDir, "backend"), stdio: "inherit" });
-      console.log("✓ Backend compiled successfully.");
-    } catch (e) {
-      console.warn("Backend build warning:", e.message);
-    }
-  }
 } else {
   console.log("→ Skipping build as requested (--skip-build).");
 }
@@ -95,46 +83,7 @@ if (fs.existsSync(publicDir)) {
   fs.cpSync(publicDir, path.join(stageStandaloneDir, "public"), { recursive: true });
 }
 
-console.log("→ Copying source code and configuration into bundle...");
-const srcDir = path.join(rootDir, "src");
-if (fs.existsSync(srcDir)) {
-  fs.cpSync(srcDir, path.join(stageDir, "src"), { recursive: true });
-}
-for (const cfg of ["next.config.ts", "tsconfig.json", "next-env.d.ts"]) {
-  const p = path.join(rootDir, cfg);
-  if (fs.existsSync(p)) {
-    fs.copyFileSync(p, path.join(stageDir, cfg));
-  }
-}
-
-console.log("→ Copying backend source, compiled dist, and prisma into bundle...");
-const backendDir = path.join(rootDir, "backend");
-const stageBackendDir = path.join(stageDir, "backend");
-const stageStandaloneBackendDir = path.join(stageStandaloneDir, "backend");
-if (fs.existsSync(backendDir)) {
-  for (const bDir of [stageBackendDir, stageStandaloneBackendDir]) {
-    fs.mkdirSync(bDir, { recursive: true });
-    for (const item of [
-      "src",
-      "dist",
-      "prisma",
-      "package.json",
-      "tsconfig.json",
-      "tsconfig.build.json",
-      "nest-cli.json",
-      "Dockerfile",
-      "README.md",
-      ".env.example",
-    ]) {
-      const srcItem = path.join(backendDir, item);
-      const dstItem = path.join(bDir, item);
-      if (fs.existsSync(srcItem)) {
-        fs.cpSync(srcItem, dstItem, { recursive: true });
-      }
-    }
-  }
-  console.log("✓ Backend included in deployment bundle.");
-}
+// Source code (src/, backend/) is not needed at runtime and must not sit in the web document root.
 
 console.log("→ Configuring package.json scripts for Hostinger automated deploy...");
 const buildScript = 'node -e "const fs = require(\'fs\'); for (const p of [\'.next/standalone/server.js\', \'server.js\']) { if (fs.existsSync(p)) { const now = new Date(); fs.utimesSync(p, now, now); } } console.log(\'Next.js standalone server ready.\');"';
@@ -166,7 +115,9 @@ try {
       _j(process.cwd(), "data", "autoneural-crm.sqlite"),
       _j(__dirname, "..", "..", "data", "autoneural-crm.sqlite"),
     ];
-    process.env.CRM_DATABASE_PATH = candidatePaths.find(p => _es(p)) || candidatePaths[0];
+    // An existing database is kept where it is; a new one goes outside the web document root.
+    const outside = process.env.HOME ? _j(process.env.HOME, "autoneural-${targetSubdomain}", "data", "autoneural-crm.sqlite") : candidatePaths[0];
+    process.env.CRM_DATABASE_PATH = candidatePaths.find(p => _es(p)) || outside;
   }
 } catch (e) {}
 `;
@@ -216,7 +167,9 @@ if (!process.env.CRM_DATABASE_PATH || !isAbsolute(process.env.CRM_DATABASE_PATH)
     join(process.cwd(), "data", "autoneural-crm.sqlite"),
     join(__dirname, "..", "..", "data", "autoneural-crm.sqlite"),
   ];
-  process.env.CRM_DATABASE_PATH = candidatePaths.find(p => existsSync(p)) || candidatePaths[0];
+  // An existing database is kept where it is; a new one goes outside the web document root.
+  const outside = process.env.HOME ? join(process.env.HOME, "autoneural-${targetSubdomain}", "data", "autoneural-crm.sqlite") : candidatePaths[0];
+  process.env.CRM_DATABASE_PATH = candidatePaths.find(p => existsSync(p)) || outside;
 }
 
 process.env.NODE_ENV = "production";
@@ -240,6 +193,12 @@ RewriteEngine On
 RewriteCond %{HTTPS} !=on
 RewriteCond %{HTTP:X-Forwarded-Proto} !https
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# This folder is the web document root: never serve data, secrets or server files from it.
+RewriteRule ^(data|uploads|tmp|logs|backups|node_modules|src|backend|\\.next/(server|standalone|cache|types))(/|$) - [F,L]
+<FilesMatch "(^\\.|\\.(sqlite|sqlite-wal|sqlite-shm|db|env|log|bak|map|tsbuildinfo)$)">
+  Require all denied
+</FilesMatch>
 `;
 fs.writeFileSync(path.join(stageDir, ".htaccess"), htaccessContent);
 
@@ -337,15 +296,8 @@ HOW TO DEPLOY ON HOSTINGER FILE MANAGER IN 3 MINUTES:
      "tmp/restart.txt" in Hostinger File Manager.
 
 4. SIGN IN AT ${targetUrl}:
-   - Primary Admin (Technical Lead):
-     Email:    shourya@autoneural.in
-     Password: tnjA84eHD0qUXkUI7m5O
-     (Or easy fallback: AutoNeural@2026!)
-
-   - Secondary Admin:
-     Email:    info@autoneural.in
-     Password: _dC7jW0hqjEgsQenWr-J
-     (Or easy fallback: AutoNeural@2026!)
+   - Master admin: info@autoneural.in
+     Use your existing password. Passwords are never included in deployment packages.
 
 NOTE ON LITESPEED / PASSENGER:
 The included .htaccess and passenger.js automatically tell Hostinger's LiteSpeed

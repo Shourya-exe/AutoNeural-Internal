@@ -229,6 +229,10 @@ export class EmployeesService {
       }
     }
 
+    if (existing.isPlatformAdmin && ((dto.role && dto.role !== Role.ADMIN) || (dto.email && dto.email.toLowerCase().trim() !== existing.email))) {
+      throw new ForbiddenException('The master admin account cannot be demoted or re-addressed');
+    }
+
     if (dto.role === Role.EMPLOYEE && existing.role === Role.ADMIN) {
       const adminCount = await this.prisma.user.count({
         where: { organizationId, role: Role.ADMIN, status: AccountStatus.ACTIVE },
@@ -284,6 +288,10 @@ export class EmployeesService {
 
     if (!employee) {
       throw new NotFoundException(`Employee with ID ${employeeId} not found`);
+    }
+
+    if (employee.isPlatformAdmin) {
+      throw new ForbiddenException('The master admin account cannot be removed');
     }
 
     // Check if there is already an active pending request
@@ -382,8 +390,12 @@ export class EmployeesService {
       throw new BadRequestException(`Removal request has already been ${request.status.toLowerCase()}`);
     }
 
-    // DUAL-AUTHORIZATION RULE: An admin cannot approve their own removal request!
-    if (request.requestedById === reviewerId) {
+    // DUAL-AUTHORIZATION RULE: An admin cannot approve their own removal request,
+    // except the master admin, who may be the organization's only administrator.
+    const reviewer = request.requestedById === reviewerId
+      ? await this.prisma.user.findUnique({ where: { id: reviewerId } })
+      : null;
+    if (request.requestedById === reviewerId && !reviewer?.isPlatformAdmin) {
       throw new ForbiddenException(
         'Dual-authorization required: You cannot approve your own employee removal request. Another admin must review and approve it.',
       );
@@ -509,6 +521,10 @@ export class EmployeesService {
 
     if (!user) {
       throw new NotFoundException(`Employee with ID ${id} not found`);
+    }
+
+    if (user.isPlatformAdmin) {
+      throw new ForbiddenException('The master admin account cannot be deactivated');
     }
 
     await this.prisma.$transaction([

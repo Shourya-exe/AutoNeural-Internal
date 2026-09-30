@@ -18,6 +18,8 @@ import {
   resetPassword,
   createEmployee,
   logout,
+  requestRemoval,
+  approveRemoval,
   allAuthLogs,
   deleteTask,
   AppError,
@@ -26,8 +28,7 @@ const dir = mkdtempSync(join(tmpdir(), "autoneural-test-"));
 process.env.CRM_DATABASE_PATH = join(dir, "test.sqlite");
 const credentials = setupAccounts(),
   initialUsers = allUsers(),
-  admin = initialUsers.find((u) => u.email === "info@autoneural.in")!,
-  shourya = initialUsers.find((u) => u.email === "shourya@autoneural.in")!;
+  admin = initialUsers.find((u) => u.email === "info@autoneural.in")!;
 
 // Provision test employees for scoped employee tests
 const emp1Res = createEmployee(admin, {
@@ -56,17 +57,38 @@ after(() => {
   db().close();
   rmSync(dir, { recursive: true, force: true });
 });
-test("Setup creates two administrators: info and Shourya Kumar (Technical Lead)", () => {
-  assert.equal(initialUsers.length, 2);
+test("Setup creates only the master admin (info@autoneural.in)", () => {
+  assert.equal(initialUsers.length, 1);
   assert.equal(admin.email, "info@autoneural.in");
-  assert.equal(shourya.email, "shourya@autoneural.in");
-  assert.equal(shourya.name, "Shourya Kumar");
-  assert.equal(shourya.role, "admin");
-  assert.equal(shourya.designation, "Technical Lead");
-  assert.equal(initialUsers.filter((u) => u.role === "admin").length, 2);
-  assert.ok(initialUsers.every((u) => u.mustChange));
-  assert.equal(new Set(credentials.map((c) => c.password)).size, 2);
+  assert.equal(admin.role, "admin");
+  assert.ok(admin.mustChange);
+  assert.equal(credentials.length, 1);
   assert.throws(setupAccounts, /already exist/);
+});
+test("No hard-coded fallback passwords unlock admin accounts", () => {
+  for (const pw of ["Password123!", "AutoNeural@2026!"])
+    assert.throws(() => login(admin.email, pw), /incorrect/);
+});
+test("Master admin: only it creates admins; it cannot be removed; it may approve removals alone", () => {
+  const second = createEmployee(admin, { name: "Second Admin", email: "admin2@autoneural.in", role: "admin" });
+  const admin2 = allUsers().find((u) => u.id === second.id)!;
+  assert.equal(admin2.role, "admin");
+  assert.throws(
+    () => createEmployee(admin2, { name: "Third", email: "admin3@autoneural.in", role: "admin" }),
+    (e) => e instanceof AppError && e.status === 403,
+  );
+  assert.throws(() => requestRemoval(admin2, admin.id), (e) => e instanceof AppError && e.status === 403);
+  assert.throws(() => resetPassword(admin2, admin.id), (e) => e instanceof AppError && e.status === 403);
+  // Ordinary admins still need a second admin to approve their own request...
+  const temp = createEmployee(admin, { name: "Temp", email: "temp@autoneural.in" });
+  const req1 = requestRemoval(admin2, temp.id);
+  assert.throws(() => approveRemoval(admin2, req1.id), (e) => e instanceof AppError && e.status === 403);
+  approveRemoval(admin, req1.id);
+  // ...but the master admin can act alone.
+  const temp2 = createEmployee(admin, { name: "Temp Two", email: "temp2@autoneural.in" });
+  approveRemoval(admin, requestRemoval(admin, temp2.id).id);
+  assert.ok(!allUsers().some((u) => u.id === temp.id || u.id === temp2.id));
+  approveRemoval(admin, requestRemoval(admin, admin2.id).id);
 });
 test("Passwords are hashed; sessions expire, revoke, and rotate after password change", () => {
   const c = { email: emp1.email, password: emp1Res.initialPassword };
@@ -183,12 +205,12 @@ test("Login attempts are limited even for nonexistent accounts", () => {
   );
 });
 test("Audit logs accurately record login and logout events with timestamps and roles", () => {
-  const c = credentials.find((c) => c.email === shourya.email)!;
-  const signin = login(shourya.email, c.password, { ip: "192.168.1.50", userAgent: "Mozilla/5.0 TestBrowser" });
+  const c = credentials.find((c) => c.email === admin.email)!;
+  const signin = login(admin.email, c.password, { ip: "192.168.1.50", userAgent: "Mozilla/5.0 TestBrowser" });
   logout(signin.token, { ip: "192.168.1.50", userAgent: "Mozilla/5.0 TestBrowser" });
   const logs = allAuthLogs(20);
-  const loginLog = logs.find((l) => l.email === shourya.email && l.action === "LOGIN");
-  const logoutLog = logs.find((l) => l.email === shourya.email && l.action === "LOGOUT");
+  const loginLog = logs.find((l) => l.email === admin.email && l.action === "LOGIN");
+  const logoutLog = logs.find((l) => l.email === admin.email && l.action === "LOGOUT");
   assert.ok(loginLog);
   assert.equal(loginLog.role, "admin");
   assert.equal(loginLog.ip, "192.168.1.50");

@@ -3,7 +3,8 @@ import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { EmailService } from '../email/email.service';
+import { UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AccountStatus, Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
@@ -11,6 +12,8 @@ describe('AuthService', () => {
   let authService: AuthService;
   let prismaService: any;
   let jwtService: any;
+  let emailService: { sendEmail: jest.Mock };
+  let config: Record<string, string | null>;
 
   const mockUser = {
     id: 'user-1',
@@ -47,6 +50,13 @@ describe('AuthService', () => {
       $transaction: jest.fn().mockImplementation((cb) => (typeof cb === 'function' ? cb(prismaService) : Promise.all(cb))),
     };
 
+    emailService = { sendEmail: jest.fn().mockResolvedValue({ success: true }) };
+    config = {
+      JWT_ACCESS_SECRET: "test-access-secret-that-is-long-enough-123",
+      JWT_REFRESH_SECRET: "test-refresh-secret-that-is-long-enough-456",
+      FRONTEND_URL: "https://app.example.com",
+    };
+
     jwtService = {
       sign: jest.fn().mockReturnValue('mocked.jwt.token'),
       verify: jest.fn(),
@@ -60,13 +70,10 @@ describe('AuthService', () => {
         {
           provide: ConfigService,
           useValue: {
-            get: jest.fn((key: string) => {
-              if (key === 'JWT_ACCESS_SECRET') return 'test-access-secret';
-              if (key === 'JWT_REFRESH_SECRET') return 'test-refresh-secret';
-              return null;
-            }),
+            get: jest.fn((key: string) => config[key] ?? null),
           },
         },
+        { provide: EmailService, useValue: emailService },
       ],
     }).compile();
 
@@ -150,6 +157,54 @@ describe('AuthService', () => {
           newPassword: 'Password123!',
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('emails a single-use link and never returns or exposes the token', async () => {
+      prismaService.user.findFirst.mockResolvedValue(mockUser);
+      jwtService.sign.mockReturnValue('reset.jwt.token');
+
+      const result = await authService.forgotPassword('info@autoneural.in');
+
+      expect(result).not.toHaveProperty('resetToken');
+      expect(JSON.stringify(result)).not.toContain('reset.jwt.token');
+      expect(emailService.sendEmail).toHaveBeenCalledTimes(1);
+      const mail = emailService.sendEmail.mock.calls[0][0];
+      expect(mail.to).toBe(mockUser.email);
+      expect(mail.text).toContain('https://app.example.com/reset-password?token=reset.jwt.token');
+      // Signed with a dedicated key (not the access-token secret) and bound to the current password.
+      const [payload, options] = jwtService.sign.mock.calls[0];
+      expect(payload.purpose).toBe('password_reset');
+      expect(payload.pwd).toHaveLength(16);
+      expect(options.secret).not.toBe(config.JWT_ACCESS_SECRET);
+    });
+
+    it('gives the same answer for unknown emails and sends nothing', async () => {
+      prismaService.user.findFirst.mockResolvedValue(null);
+      const unknown = await authService.forgotPassword('nobody@example.com');
+      prismaService.user.findFirst.mockResolvedValue(mockUser);
+      const known = await authService.forgotPassword('info@autoneural.in');
+      expect(unknown).toEqual(known);
+      expect(emailService.sendEmail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('resetPassword', () => {
+    it('rejects a link that was already used (password changed since)', async () => {
+      jwtService.verify.mockReturnValue({ sub: mockUser.id, purpose: 'password_reset', pwd: 'stale-fingerprint' });
+      prismaService.user.findUnique.mockResolvedValue(mockUser);
+      await expect(authService.resetPassword({ token: 't', newPassword: 'BrandNewPass123!' })).rejects.toThrow(BadRequestException);
+      expect(prismaService.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('register', () => {
+    it('is disabled unless ALLOW_PUBLIC_REGISTRATION=true', async () => {
+      await expect(
+        authService.register({ organizationName: 'X', organizationSlug: 'x', adminName: 'A', adminEmail: 'a@x.com', password: 'Password123!' } as any),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaService.organization.create).not.toHaveBeenCalled();
     });
   });
 });

@@ -375,4 +375,35 @@ describe('EmployeesService', () => {
       });
     });
   });
+
+  describe('master (platform) admin', () => {
+    const master = { id: 'master-1', organizationId: mockOrgId, email: 'info@autoneural.in', role: Role.ADMIN, isPlatformAdmin: true };
+
+    it('cannot be demoted', async () => {
+      prisma.user.findFirst.mockResolvedValue(master);
+      await expect(employeesService.update(mockOrgId, master.id, { role: Role.EMPLOYEE } as any)).rejects.toThrow(ForbiddenException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('cannot be targeted for removal or deactivated', async () => {
+      prisma.user.findFirst.mockResolvedValue(master);
+      await expect(employeesService.requestRemoval(mockOrgId, master.id, mockAdmin1Id, 'Admin One')).rejects.toThrow(ForbiddenException);
+      await expect(employeesService.deactivate(mockOrgId, master.id, mockAdmin1Id)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('may approve its own removal request (it can be the only admin)', async () => {
+      prisma.employeeRemovalRequest.findFirst.mockResolvedValue({
+        id: mockRequestId,
+        employeeId: mockEmpId,
+        requestedById: master.id,
+        status: RemovalRequestStatus.PENDING,
+        employee: { id: mockEmpId, name: 'Emp' },
+        requestedBy: { id: master.id, name: 'AutoNeural Admin' },
+      });
+      prisma.user.findUnique.mockResolvedValue(master);
+      prisma.employeeRemovalRequest.update.mockResolvedValue({ status: RemovalRequestStatus.APPROVED });
+      prisma.user.update.mockResolvedValue({});
+      await expect(employeesService.approveRemoval(mockOrgId, mockRequestId, master.id, 'AutoNeural Admin')).resolves.toBeDefined();
+    });
+  });
 });

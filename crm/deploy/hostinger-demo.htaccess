@@ -1,0 +1,12 @@
+# Route demo.autoneural.in through the Hostinger Passenger Node runtime.
+PassengerAppRoot /home/u294542559/autoneural-crm-demo
+PassengerAppType node
+PassengerNodejs /opt/alt/alt-nodejs22/root/usr/bin/node
+PassengerStartupFile passenger.js
+PassengerBaseURI /
+PassengerRestartDir /home/u294542559/autoneural-crm-demo/tmp
+
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteCond %{HTTP:X-Forwarded-Proto} !https
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]

@@ -1,8 +1,7 @@
 # ==============================================================================
-# AutoNeural Production Docker Compose Stack for Hostinger Cloud VPS
-# Serves application with automatic Let's Encrypt SSL on https://<subdomain>.autoneural.in
+# AutoNeural workspace on a VPS (Docker + Caddy with automatic HTTPS)
 #
-# Usage:
+#   cp .env.production.example .env.production   # fill in, chmod 600
 #   docker compose up -d --build
 # ==============================================================================
 
@@ -12,14 +11,20 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
     environment:
       - NODE_ENV=production
       - CRM_APP_URL=https://${APP_DOMAIN:-crm.autoneural.in}
       - CRM_DATABASE_PATH=/app/data/autoneural-crm.sqlite
+      - CRM_UPLOAD_DIR=/app/data/uploads
     volumes:
       - app_data:/app/data
     expose:
       - "3000"
+    # Let in-flight requests finish and SQLite close cleanly on shutdown.
+    stop_grace_period: 30s
 
   caddy:
     image: caddy:2-alpine
@@ -34,7 +39,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - app
+      app:
+        condition: service_healthy
 
 volumes:
   app_data:

@@ -8,10 +8,20 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
-export default function Login() {
+import { api } from "@/lib/client";
+export default function Login({ next = "/" }: { next?: string }) {
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [visible, setVisible] = useState(false);
+    [visible, setVisible] = useState(false),
+    // "reset": ask an administrator to approve a password reset.
+    [mode, setMode] = useState<"signin" | "reset">("signin"),
+    [resetSent, setResetSent] = useState("");
+  const switchTo = (m: "signin" | "reset") => {
+    setMode(m);
+    setError("");
+    setResetSent("");
+    setBusy(false);
+  };
   return (
     <div className="login-page">
       <section className="login-story">
@@ -63,79 +73,126 @@ export default function Login() {
           <span className="label-pill">
             <ShieldCheck size={14} /> PRIVATE WORKSPACE
           </span>
-          <h2>Welcome back.</h2>
-          <p>Sign in with your AutoNeural work account.</p>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setBusy(true);
-              setError("");
-              const f = new FormData(e.currentTarget);
-              try {
-                const r = await fetch("/api/auth", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    email: f.get("email"),
-                    password: f.get("password"),
-                  }),
-                });
-                const j = await r.json();
-                if (!r.ok) throw new Error(j.error);
-                window.location.assign("/");
-              } catch (e) {
-                setError(e instanceof Error ? e.message : "Unable to sign in.");
-                setBusy(false);
-              }
-            }}
-          >
-            <label>
-              Work email
-              <input
-                name="email"
-                type="email"
-                placeholder="you@autoneural.in"
-                autoComplete="username"
-                required
-                maxLength={254}
-              />
-            </label>
-            <label>
-              Password
-              <div className="password-field">
+          {mode === "signin" ? (
+            <>
+            <h2>Welcome back.</h2>
+            <p>Sign in with your AutoNeural work account.</p>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setBusy(true);
+                setError("");
+                const f = new FormData(e.currentTarget);
+                try {
+                  await api("/api/auth", {
+                    body: { email: f.get("email"), password: f.get("password") },
+                    noRedirect: true,
+                  });
+                  window.location.assign(next);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "Unable to sign in.");
+                  setBusy(false);
+                }
+              }}
+            >
+              <label>
+                Work email
                 <input
-                  name="password"
-                  type={visible ? "text" : "password"}
-                  placeholder="Enter your CRM password"
-                  autoComplete="current-password"
+                  name="email"
+                  type="email"
+                  placeholder="you@autoneural.in"
+                  autoComplete="username"
                   required
-                  maxLength={200}
+                  maxLength={254}
                 />
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label={visible ? "Hide password" : "Show password"}
-                  onClick={() => setVisible(!visible)}
-                >
-                  {visible ? <EyeOff size={17} /> : <Eye size={17} />}
+              </label>
+              <label>
+                Password
+                <div className="password-field">
+                  <input
+                    name="password"
+                    type={visible ? "text" : "password"}
+                    placeholder="Enter your CRM password"
+                    autoComplete="current-password"
+                    required
+                    maxLength={200}
+                  />
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={visible ? "Hide password" : "Show password"}
+                    onClick={() => setVisible(!visible)}
+                  >
+                    {visible ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </div>
+              </label>
+              {error && (
+                <p className="error" role="alert">
+                  {error}
+                </p>
+              )}
+              <button className="button primary wide" disabled={busy}>
+                {busy ? "Signing in…" : "Sign in to workspace"}
+                <ArrowRight size={17} />
+              </button>
+            </form>
+            <p className="login-help">
+              <button type="button" className="text-button" onClick={() => switchTo("reset")}>
+                Forgot your password?
+              </button>
+              <br />
+              First time here? Ask your workspace administrator for your CRM login.
+            </p>
+            </>
+          ) : (
+            <>
+            <h2>Reset your password.</h2>
+            <p>An administrator approves every reset. You will then get a temporary password by email or from them.</p>
+            {resetSent ? (
+              <p className="login-help" role="status">{resetSent}</p>
+            ) : (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setBusy(true);
+                  setError("");
+                  const f = new FormData(e.currentTarget);
+                  try {
+                    const r = await api<{ message: string }>("/api/auth/reset-request", {
+                      body: { email: f.get("email") },
+                      noRedirect: true,
+                    });
+                    setResetSent(r.message);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Unable to send the request.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                <label>
+                  Work email
+                  <input name="email" type="email" placeholder="you@autoneural.in" autoComplete="username" required maxLength={254} />
+                </label>
+                {error && (
+                  <p className="error" role="alert">
+                    {error}
+                  </p>
+                )}
+                <button className="button primary wide" disabled={busy}>
+                  {busy ? "Sending…" : "Request password reset"}
+                  <ArrowRight size={17} />
                 </button>
-              </div>
-            </label>
-            {error && (
-              <p className="error" role="alert">
-                {error}
-              </p>
+              </form>
             )}
-            <button className="button primary wide" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in to workspace"}
-              <ArrowRight size={17} />
-            </button>
-          </form>
-          <p className="login-help">
-            First time here or need a password reset?
-            <br />
-            Ask your workspace administrator for your CRM login.
-          </p>
+            <p className="login-help">
+              <button type="button" className="text-button" onClick={() => switchTo("signin")}>
+                Back to sign in
+              </button>
+            </p>
+            </>
+          )}
           <div className="secure-note">
             <ShieldCheck size={16} /> Your work stays within your team.
           </div>

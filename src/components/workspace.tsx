@@ -50,7 +50,55 @@ import {
   Reply,
   Eye,
   EyeOff,
+  Target,
+  PhoneCall,
+  KanbanSquare,
+  Sparkles,
+  LifeBuoy,
+  Megaphone,
+  MapPin,
+  Receipt,
+  Wallet,
+  Star,
+  GraduationCap,
+  PartyPopper,
+  Briefcase,
+  IdCard,
+  Workflow,
+  MessageCircle,
+  Gauge,
+  ScrollText,
 } from "lucide-react";
+import { api } from "@/lib/client";
+import { InboxView } from "./inbox";
+import { AutomationsView } from "./automations";
+import { AuditView, UsageView } from "./admin";
+import { LeadsView } from "./leads";
+import { Modal } from "./kit";
+import { CallsView } from "./calls";
+import { AssistantView, CampaignsView, DocumentsView, LeadPanel, PipelineView, SupportView, type LeadRow } from "./sales";
+import { AttendanceView, ClaimsView, EmployeesView, EngagementView, HiringView, LearningView, LeaveView, PayrollView, PerformanceView } from "./hr";
+
+const PAGE_TEXT: Record<string, [string, string]> = {
+  Pipeline: ["Every deal, one board.", "Drag deals between stages, track value and never miss a follow-up."],
+  "Quotes & Invoices": ["Quote, invoice, get paid.", "GST quotations and invoices with online acceptance, UPI QR and payment links."],
+  "AI Assistant": ["Ask your business anything.", "Plain-English answers from your leads, pipeline, calls and invoices."],
+  Support: ["Every concern, resolved.", "Grievances and service requests with owners, status and a written trail."],
+  Campaigns: ["Reach every lead at once.", "Email and WhatsApp campaigns to the leads you choose."],
+  Attendance: ["Clock in from anywhere.", "Selfie and GPS attendance, with live routes for field staff."],
+  Leave: ["Time off, without the chase.", "Apply, approve and track leave. Leads skip people who are away."],
+  Claims: ["Expenses, reimbursed.", "Submit bills with a photo; approved claims are paid with salary."],
+  Payroll: ["Salaries, calculated (beta).", "Attendance-based payroll with PF, ESI, professional tax and payslips. Beta: verify each run with your CA before paying."],
+  Inbox: ["Every WhatsApp chat, one inbox.", "Shared WhatsApp inbox with owners, AI replies and human takeover. Every message lands on the customer timeline."],
+  Automations: ["Remove the repetitive work.", "When something happens, do the next steps automatically. You review every automation before it goes live."],
+  Usage: ["Know what AI and messaging cost.", "AI credits, voice minutes and WhatsApp messages, priced with your own rate card, with monthly budgets."],
+  Audit: ["Every important action, recorded.", "Payments, settings, automations and every AI action — who did what, and when."],
+  Performance: ["Goals that move the business.", "Weighted goals, self ratings and manager appraisals each cycle."],
+  Learning: ["Grow the team.", "Courses for onboarding, product and sales skills."],
+  Engagement: ["Celebrate the team.", "Announcements, kudos, birthdays and work anniversaries."],
+  Hiring: ["Hire the right people.", "Open roles and every candidate from application to offer."],
+  Employees: ["Your people, organised.", "Profiles, salaries and HR policy used across the workspace."],
+};
 import {
   statuses,
   priorities,
@@ -62,6 +110,8 @@ import {
   type Status,
   type AuthLog,
   type EmailMessage,
+  isMasterAdmin,
+  ATTACHMENT_ACCEPT,
 } from "@/lib/types";
 const initials = (name: string) =>
   name
@@ -87,25 +137,25 @@ const today = () =>
   }).format(new Date());
 const overdue = (t: Task) => t.status !== "Completed" && t.dueDate < today();
 const statusClass = (s: string) => s.toLowerCase().replaceAll(" ", "-");
-async function request(path: string, body?: unknown, method = "POST") {
-  const r = await fetch(
-    path,
-    body
-      ? {
-          method,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      : undefined,
-  );
-  const j = await r.json();
-  if (r.status === 401) {
-    window.location.assign("/login");
-    throw new Error("Please sign in.");
-  }
-  if (!r.ok) throw new Error(j.error || "Unable to save.");
-  return j;
+function request(path: string, body?: unknown, method = "POST") {
+  return body === undefined ? api(path, method === "POST" ? {} : { method }) : api(path, { method, body });
 }
+/** Uploads a file to a task (stored on the server, downloadable by anyone who can open the task). */
+function uploadAttachment(taskId: string, file: File, name: string, purpose: string) {
+  const form = new FormData();
+  form.set("taskId", taskId);
+  form.set("file", file);
+  if (name.trim()) form.set("name", name.trim());
+  form.set("purpose", purpose);
+  return api<{ id: string; url: string }>("/api/attachments", { form });
+}
+/** Accurate toast text for a sent message: emailed, or only delivered to a workspace inbox. */
+const deliveryMessage = (m: { recipientEmail: string; delivery?: string; deliveryError?: string }, what: string) =>
+  m.delivery === "workspace"
+    ? `${what} delivered to ${m.recipientEmail}'s workspace inbox only (${m.deliveryError ?? "external email is not configured"}).`
+    : `${what} sent to ${m.recipientEmail}.`;
+/** Files recorded before uploads were stored have no downloadable content. */
+const hasStoredFile = (a: TaskAttachment) => a.type === "LINK" || a.url.startsWith("/api/attachments/");
 function Avatar({
   user,
   small = false,
@@ -125,51 +175,6 @@ function StatusBadge({ status }: { status: string }) {
       <i />
       {status}
     </span>
-  );
-}
-function Modal({
-  children,
-  title,
-  onClose,
-  wide = false,
-}: {
-  children: ReactNode;
-  title: string;
-  onClose: () => void;
-  wide?: boolean;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
-  useEffect(() => {
-    const d = ref.current;
-    d?.showModal();
-    return () => d?.close();
-  }, []);
-  return (
-    <dialog
-      ref={ref}
-      aria-labelledby={titleId}
-      className={`modal ${wide ? "modal-wide" : ""}`}
-      onCancel={(e) => {
-        e.preventDefault();
-        onClose();
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="modal-heading">
-        <h2 id={titleId}>{title}</h2>
-        <button
-          className="icon-button"
-          aria-label="Close dialog"
-          onClick={onClose}
-        >
-          <X size={21} />
-        </button>
-      </div>
-      {children}
-    </dialog>
   );
 }
 function PasswordForm({
@@ -338,12 +343,14 @@ function EmailSettingsCard({
           >
             <i style={{ background: status?.configured ? "#10b981" : "#f59e0b", width: "6px", height: "6px", borderRadius: "50%", display: "inline-block" }} />
             {status?.provider === "smtp"
-              ? "Hostinger SMTP Active"
+              ? "SMTP Active"
               : status?.provider === "resend"
                 ? "Resend Active"
                 : status?.provider === "emailjs"
                   ? "EmailJS Active"
-                  : "Simulation Mode (Console Logs)"}
+                  : status?.provider === "simulated"
+                    ? "Development mode (logged, not sent)"
+                    : "Not configured — emails are not sent"}
           </span>
         </div>
       </div>
@@ -361,10 +368,10 @@ function EmailSettingsCard({
           }}
         >
           <strong style={{ display: "block", marginBottom: "4px" }}>
-            Hostinger Mail Configuration Guide:
+            Email delivery is not configured
           </strong>
           <span>
-            Emails are currently being generated and tracked inside your CRM Inbox and Sent box. To also deliver real emails to your <strong>Hostinger Webmail</strong> (or external email clients), add your Hostinger email password to <code>.env.local</code>:
+            Workspace messages still appear in each person&apos;s Mail inbox, but nothing is emailed. Add these settings to the server&apos;s environment file (<code>.env.production</code> in production, <code>.env.local</code> for development) and restart the app:
           </span>
           <pre
             style={{
@@ -385,7 +392,7 @@ SMTP_PASS="your_hostinger_email_password"
 SMTP_FROM_EMAIL="AutoNeural Workspace <info@autoneural.in>"`}
           </pre>
           <small style={{ display: "block", marginTop: "6px", color: "#78350f" }}>
-            Tip: Restart the development server after saving <code>.env.local</code> to activate live delivery.
+            Or set <code>RESEND_API_KEY</code> and <code>RESEND_FROM_EMAIL</code> to use Resend instead.
           </small>
         </div>
       )}
@@ -473,41 +480,47 @@ function downloadAuthLogsCsv(logs: AuthLog[]) {
     "IP Address",
     "Device / User Agent",
   ];
+  // Quote every cell, and neutralise values a spreadsheet would run as a formula.
+  const cell = (v: unknown) => {
+    const s = String(v ?? "");
+    return `"${(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s).replace(/"/g, '""')}"`;
+  };
   const rows = logs.map((l) => {
     const d = new Date(l.timestamp);
     const dateStr = d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
     const timeStr = d.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" });
-    return [
-      l.id,
-      l.timestamp,
-      dateStr,
-      timeStr,
-      `"${(l.name || "").replace(/"/g, '""')}"`,
-      l.email,
-      l.role,
-      l.action,
-      l.ip || "127.0.0.1",
-      `"${(l.userAgent || "").replace(/"/g, '""')}"`,
-    ].join(",");
+    return [l.id, l.timestamp, dateStr, timeStr, l.name, l.email, l.role, l.action, l.ip || "unknown", l.userAgent || ""].map(cell).join(",");
   });
-  const csvContent =
-    "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-  const encodedUri = encodeURI(csvContent);
+  const blob = new Blob(["﻿" + [headers.map(cell).join(","), ...rows].join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute(
-    "download",
-    `autoneural-login-audit-logs-${new Date().toISOString().slice(0, 10)}.csv`,
-  );
+  link.href = url;
+  link.download = `autoneural-login-audit-logs-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
-export default function Workspace({ initialUser }: { initialUser: User }) {
+/** Every screen reachable from the sidebar; used to validate ?page= links. */
+const PAGES = new Set([
+  "Overview", "Tasks", "Completed", "Mail", "Activity", "Inbox", "Leads", "Pipeline", "Quotes & Invoices", "AI Calls",
+  "AI Assistant", "Support", "Campaigns", "Attendance", "Leave", "Claims", "Payroll", "Performance", "Learning",
+  "Engagement", "Hiring", "Employees", "Automations", "Team", "Access Logs", "Usage", "Audit", "Settings",
+]);
+
+export default function Workspace({
+  initialUser,
+  initialPage,
+  initialTask,
+}: {
+  initialUser: User;
+  initialPage?: string;
+  initialTask?: string;
+}) {
   const [user, setUser] = useState(initialUser),
     [data, setData] = useState<WorkspaceData | null>(null),
-    [page, setPage] = useState("Overview"),
+    [page, setPage] = useState(initialPage && PAGES.has(initialPage) ? initialPage : "Overview"),
     [query, setQuery] = useState(""),
     [filter, setFilter] = useState("All tasks"),
     [assignee, setAssignee] = useState("all"),
@@ -517,12 +530,15 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
     [creating, setCreating] = useState(false),
     [showAddEmployee, setShowAddEmployee] = useState(false),
     [removalTarget, setRemovalTarget] = useState<User | null>(null),
-    [selected, setSelected] = useState<string | null>(null),
+    [selected, setSelected] = useState<string | null>(initialTask && /^[0-9a-f-]{36}$/i.test(initialTask) ? initialTask : null),
+    [leadOpen, setLeadOpen] = useState<LeadRow | null>(null),
     [mobile, setMobile] = useState(false),
     [refreshing, setRefreshing] = useState(false),
     [logSearch, setLogSearch] = useState(""),
     [logFilter, setLogFilter] = useState<"ALL" | "LOGIN" | "LOGOUT">("ALL"),
     [showComposeEmail, setShowComposeEmail] = useState(false),
+    [resetBusy, setResetBusy] = useState<string | null>(null),
+    [resetResult, setResetResult] = useState<{ name: string; email: string; password: string } | null>(null),
     [composePreset, setComposePreset] = useState<{
       to?: string;
       subject?: string;
@@ -551,6 +567,17 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
     const timer = setTimeout(() => setToast(""), 4500);
     return () => clearTimeout(timer);
   }, [toast]);
+  // Keep the open page and task in the address bar so refreshes and shared links land in the same place.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (page === "Overview") q.delete("page");
+    else q.set("page", page);
+    if (selected) q.set("task", selected);
+    else q.delete("task");
+    const s = q.toString();
+    const next = s ? `/?${s}` : "/";
+    if (next !== window.location.pathname + window.location.search) window.history.replaceState(null, "", next);
+  }, [page, selected]);
   const notify = (s: string) => setToast(s);
   const signOut = async () => {
     try {
@@ -630,7 +657,9 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
     setQuery("");
     setMobile(false);
   };
-  const title =
+  const title = PAGE_TEXT[page]
+    ? PAGE_TEXT[page][0]
+    :
     page === "Overview"
       ? admin
         ? "A clear view of your team."
@@ -641,7 +670,11 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
           : "Your tasks. Your progress."
         : page === "Completed"
           ? "A little progress, every day."
-          : page === "Mail"
+          : page === "Leads"
+            ? "Every enquiry, straight to a salesperson."
+            : page === "AI Calls"
+            ? "Riya calls your leads, so no enquiry waits."
+            : page === "Mail"
             ? "Domain Mailbox & Direct Communications"
             : page === "Team"
               ? "Great work starts with a team."
@@ -650,7 +683,9 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                 : page === "Activity"
                   ? "The latest from your workspace."
                   : "Your workspace, your account.";
-  const subtitle =
+  const subtitle = PAGE_TEXT[page]
+    ? PAGE_TEXT[page][1]
+    :
     page === "Overview"
       ? admin
         ? "Keep work moving and everyone on the same page."
@@ -659,7 +694,11 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
         ? "Plan, prioritize, and move work forward."
         : page === "Completed"
           ? "A record of the work you’ve moved across the finish line."
-          : page === "Mail"
+          : page === "AI Calls"
+            ? "Outbound and inbound AI calls with transcripts and summaries, logged on each lead’s task."
+            : page === "Leads"
+            ? "Website, Meta, Google Sheets and IndiaMART leads land here automatically and are assigned in seconds."
+            : page === "Mail"
             ? "Send, view, receive, and reply to emails directly using your @autoneural.in account."
             : page === "Team"
               ? "See who’s working on what, and balance the workload."
@@ -689,64 +728,56 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
             <LockKeyhole size={14} />
           </span>
         </div>
-        <div className="nav-label">WORKSPACE</div>
-        <nav>
-          {[
-            [LayoutDashboard, "Overview"],
-            [ClipboardList, "Tasks"],
-            [CheckCheck, "Completed"],
-            [Mail, "Mail"],
-            ...(admin
-              ? [
-                  [Users, "Team"],
-                  [ShieldCheck, "Access Logs"],
-                ]
-              : []),
-            [ActivityIcon, "Activity"],
-          ].map(([Icon, label]) => {
-            const I = Icon as typeof LayoutDashboard;
-            const s = label as string;
-            return (
-              <button
-                key={s}
-                className={`nav-item ${page === s ? "selected" : ""}`}
-                onClick={() => nav(s)}
-              >
-                <I size={19} />
-                <span>{s === "Tasks" && !admin ? "My tasks" : s}</span>
-                {s === "Tasks" && (
-                  <span className="nav-count">{tasks.length - completed}</span>
-                )}
-                {s === "Mail" && Boolean(data?.unreadEmailCount) && (
-                  <span
-                    className="nav-count"
-                    style={{
-                      background: "#4f46e5",
-                      color: "#ffffff",
-                      fontWeight: 700,
-                    }}
-                  >
-                    {data?.unreadEmailCount}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        <nav className="nav-groups">
+          {(
+            [
+              ["WORKSPACE", [[LayoutDashboard, "Overview"], [ClipboardList, "Tasks"], [CheckCheck, "Completed"], [Mail, "Mail"], [ActivityIcon, "Activity"]]],
+              ["SALES", [[MessageCircle, "Inbox"], [Target, "Leads"], [KanbanSquare, "Pipeline"], [FileText, "Quotes & Invoices"], [PhoneCall, "AI Calls"], [Sparkles, "AI Assistant"], [LifeBuoy, "Support"], ...(admin ? [[Megaphone, "Campaigns"]] : [])]],
+              ["PEOPLE", [[MapPin, "Attendance"], [CalendarDays, "Leave"], [Receipt, "Claims"], [Wallet, "Payroll"], [Star, "Performance"], [GraduationCap, "Learning"], [PartyPopper, "Engagement"], ...(admin ? [[Briefcase, "Hiring"], [IdCard, "Employees"]] : [])]],
+              ...(admin
+                ? [
+                    ["AUTOMATION", [[Workflow, "Automations"]]],
+                    ["ADMIN", [[Users, "Team"], [ShieldCheck, "Access Logs"], [Gauge, "Usage"], [ScrollText, "Audit"]]],
+                  ]
+                : []),
+            ] as [string, [typeof LayoutDashboard, string][]][]
+          ).map(([group, items]) => (
+            <div key={group}>
+              <div className="nav-label">{group}</div>
+              {items.map(([I, s]) => (
+                <button
+                  key={s}
+                  className={`nav-item ${page === s ? "selected" : ""}`}
+                  onClick={() => nav(s)}
+                >
+                  <I size={19} />
+                  <span>{s === "Tasks" && !admin ? "My tasks" : s}</span>
+                  {s === "Tasks" && (
+                    <span className="nav-count">{tasks.length - completed}</span>
+                  )}
+                  {s === "Team" && Boolean(data.passwordResets?.some((r) => r.canApprove)) && (
+                    <span className="nav-count" title="Password resets waiting for approval" style={{ background: "#2563eb", color: "#ffffff", fontWeight: 700 }}>
+                      {data.passwordResets!.filter((r) => r.canApprove).length}
+                    </span>
+                  )}
+                  {s === "Mail" && Boolean(data?.unreadEmailCount) && (
+                    <span
+                      className="nav-count"
+                      style={{
+                        background: "#4f46e5",
+                        color: "#ffffff",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {data?.unreadEmailCount}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="team-note">
-            <span className="note-spark">✳</span>
-            <strong>
-              Small steps.
-              <br />
-              Shared success.
-            </strong>
-            <p>
-              Good things happen when
-              <br />
-              everyone moves together.
-            </p>
-          </div>
           <button
             className={`nav-item ${page === "Settings" ? "selected" : ""}`}
             onClick={() => nav("Settings")}
@@ -1292,7 +1323,7 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                                       fontWeight: 600,
                                     }}
                                   >
-                                    · Admin
+                                    · {isMasterAdmin(u) ? "Master admin" : "Admin"}
                                   </span>
                                 )}
                               </strong>
@@ -1382,6 +1413,90 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                   Add employee
                 </button>
               </div>
+
+              {Boolean(data.passwordResets?.length) && (
+                <div
+                  className="panel"
+                  style={{
+                    background: "rgba(37, 99, 235, 0.05)",
+                    border: "1px solid rgba(37, 99, 235, 0.25)",
+                    borderRadius: "8px",
+                    padding: "16px 20px",
+                    margin: "18px 0",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 600, color: "#1d4ed8", marginBottom: "4px" }}>
+                    <LockKeyhole size={18} />
+                    <span>Password reset requests</span>
+                  </div>
+                  <p style={{ margin: "0 0 12px", fontSize: "0.85rem", color: "#64748b" }}>
+                    Asked for on the sign-in page. Approving sets a temporary password and signs them out everywhere; it is emailed to them (or shown to you if email is not set up). Reject any request they did not make.
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {data.passwordResets!.map((r) => (
+                      <div
+                        key={r.id}
+                        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", background: "#ffffff", padding: "12px 16px", borderRadius: "6px", border: "1px solid #dbeafe" }}
+                      >
+                        <div>
+                          <strong>{r.name}</strong> ({r.email}){r.role === "admin" ? " · Administrator" : ""}
+                          <div style={{ color: "#64748b", fontSize: "0.85rem", marginTop: "2px" }}>
+                            Requested {new Date(r.requestedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}
+                            {r.ip ? ` from ${r.ip}` : ""}
+                          </div>
+                        </div>
+                        {r.canApprove ? (
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button
+                              className="button primary"
+                              style={{ fontSize: "0.85rem", padding: "6px 14px" }}
+                              disabled={resetBusy === r.id}
+                              onClick={async () => {
+                                setResetBusy(r.id);
+                                try {
+                                  const res = await request("/api/workspace", { action: "approvePasswordReset", requestId: r.id });
+                                  if (res.emailed) notify(`Temporary password emailed to ${res.email}.`);
+                                  else setResetResult({ name: res.name, email: res.email, password: res.password });
+                                  await load();
+                                } catch (e) {
+                                  notify((e as Error).message);
+                                } finally {
+                                  setResetBusy(null);
+                                }
+                              }}
+                            >
+                              {resetBusy === r.id ? "Approving…" : "Approve reset"}
+                            </button>
+                            <button
+                              className="button"
+                              style={{ fontSize: "0.85rem", padding: "6px 14px" }}
+                              disabled={resetBusy === r.id}
+                              onClick={async () => {
+                                setResetBusy(r.id);
+                                try {
+                                  await request("/api/workspace", { action: "rejectPasswordReset", requestId: r.id });
+                                  notify("Reset request rejected.");
+                                  await load();
+                                } catch (e) {
+                                  notify((e as Error).message);
+                                } finally {
+                                  setResetBusy(null);
+                                }
+                              }}
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: "0.8rem", color: "#1d4ed8", background: "#dbeafe", padding: "5px 10px", borderRadius: "4px", fontWeight: 500 }}>
+                            Needs the master admin
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {data.removalRequests && data.removalRequests.length > 0 && (
                 <div
@@ -1523,7 +1638,9 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                             </span>
                           )}
                           <span className="label-pill">
-                            {u.role === "admin"
+                            {isMasterAdmin(u)
+                              ? "Master admin"
+                              : u.role === "admin"
                               ? "Administrator"
                               : u.mustChange
                                 ? "Awaiting first login"
@@ -1569,8 +1686,10 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                             Admin access
                           </span>
                         )}
-                        <ResetPassword user={u} notify={notify} />
-                        {!isCurrentUser && (
+                        {(u.role !== "admin" || isMasterAdmin(user)) && (
+                          <ResetPassword user={u} notify={notify} />
+                        )}
+                        {!isCurrentUser && !isMasterAdmin(u) && (
                           pendingReq ? (
                             <span
                               style={{
@@ -1914,7 +2033,7 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                                   color: "#334155",
                                 }}
                               >
-                                {log.ip || "127.0.0.1"}
+                                {log.ip || "unknown"}
                               </td>
                               <td
                                 style={{
@@ -1955,6 +2074,63 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
                 />
               )}
             </section>
+          )}
+          {page === "Leads" && (
+            <LeadsView
+              user={user}
+              team={data.team}
+              notify={notify}
+              onOpenTask={(taskId) => setSelected(taskId)}
+              onOpenLead={setLeadOpen}
+              onChanged={load}
+            />
+          )}
+          {page === "Inbox" && (
+            <InboxView
+              user={user}
+              notify={notify}
+              onOpenLead={(id) =>
+                void api<{ leads: LeadRow[] }>("/api/leads")
+                  .then((d) => {
+                    const l = d.leads.find((x) => x.id === id);
+                    if (l) setLeadOpen(l);
+                    else notify("This lead belongs to someone else.");
+                  })
+                  .catch((e: Error) => notify(e.message))
+              }
+            />
+          )}
+          {page === "Automations" && admin && <AutomationsView notify={notify} />}
+          {page === "Usage" && admin && <UsageView notify={notify} />}
+          {page === "Audit" && admin && <AuditView />}
+          {page === "Pipeline" && <PipelineView user={user} notify={notify} onOpen={setLeadOpen} />}
+          {page === "Quotes & Invoices" && <DocumentsView user={user} notify={notify} />}
+          {page === "AI Calls" && <CallsView user={user} notify={notify} />}
+          {page === "AI Assistant" && <AssistantView notify={notify} />}
+          {page === "Support" && <SupportView user={user} notify={notify} />}
+          {page === "Campaigns" && admin && <CampaignsView notify={notify} />}
+          {page === "Attendance" && <AttendanceView user={user} notify={notify} />}
+          {page === "Leave" && <LeaveView user={user} notify={notify} />}
+          {page === "Claims" && <ClaimsView user={user} notify={notify} />}
+          {page === "Payroll" && <PayrollView user={user} notify={notify} />}
+          {page === "Performance" && <PerformanceView user={user} notify={notify} />}
+          {page === "Learning" && <LearningView user={user} notify={notify} />}
+          {page === "Engagement" && <EngagementView user={user} notify={notify} />}
+          {page === "Hiring" && admin && <HiringView notify={notify} />}
+          {page === "Employees" && admin && <EmployeesView notify={notify} />}
+          {leadOpen && (
+            <LeadPanel
+              lead={leadOpen}
+              user={user}
+              notify={notify}
+              onClose={() => setLeadOpen(null)}
+              onChanged={load}
+              onCompose={(preset) => {
+                setLeadOpen(null);
+                setComposePreset(preset);
+                setShowComposeEmail(true);
+              }}
+            />
           )}
           {page === "Mail" && (
             <MailView
@@ -2029,16 +2205,40 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
         <TaskEditor
           user={user}
           team={data.team}
+          uploadLimitMb={data.uploadLimitMb}
           onClose={() => setCreating(false)}
-          onSaved={async () => {
+          onSaved={async (warning) => {
             setCreating(false);
             await load();
-            notify("Task created and assigned.");
+            notify(warning ?? "Task created and assigned.");
           }}
         />
       )}
+      {resetResult && (
+        <Modal title={`Temporary password for ${resetResult.name}`} onClose={() => setResetResult(null)}>
+          <p>
+            The reset is approved, but this password could not be emailed to {resetResult.email} (email delivery is not set up). Share it with{" "}
+            {resetResult.name} privately; they must change it when they sign in.
+          </p>
+          <div className="temporary-password">{resetResult.password}</div>
+          <button
+            className="button primary"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(resetResult.password);
+                notify("Temporary password copied.");
+              } catch {
+                notify("Copy the password shown above.");
+              }
+            }}
+          >
+            Copy password
+          </button>
+        </Modal>
+      )}
       {showAddEmployee && (
         <AddEmployeeModal
+          canCreateAdmin={isMasterAdmin(user)}
           onClose={() => setShowAddEmployee(false)}
           onSaved={load}
           notify={notify}
@@ -2075,6 +2275,7 @@ export default function Workspace({ initialUser }: { initialUser: User }) {
           id={selected}
           user={user}
           team={data.team}
+          uploadLimitMb={data.uploadLimitMb}
           onClose={() => setSelected(null)}
           onSaved={load}
           notify={notify}
@@ -2203,14 +2404,17 @@ function TaskEditor({
   user,
   team,
   task,
+  uploadLimitMb = 25,
   onClose,
   onSaved,
 }: {
   user?: User;
   team: User[];
   task?: Task;
+  uploadLimitMb?: number;
   onClose: () => void;
-  onSaved: () => void;
+  /** Called after saving; `warning` explains a partial success. */
+  onSaved: (warning?: string) => void;
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -2228,32 +2432,14 @@ function TaskEditor({
           setError("");
           const f = new FormData(e.currentTarget);
           try {
-            let attachmentPayload: { name: string; type: string; url: string; fileSize?: number; purpose: string } | undefined = undefined;
-            if (!task) {
-              if (attachType === "file" && selectedFile) {
-                const customName = (f.get("attachmentName") as string)?.trim();
-                attachmentPayload = {
-                  name: customName || selectedFile.name,
-                  type: "DOCUMENT",
-                  url: "#",
-                  fileSize: selectedFile.size,
-                  purpose: "REFERENCE",
-                };
-              } else if (attachType === "link") {
-                const url = (f.get("linkUrl") as string)?.trim();
-                if (url) {
-                  const name = (f.get("linkName") as string)?.trim() || url;
-                  attachmentPayload = {
-                    name,
-                    type: "LINK",
-                    url,
-                    purpose: "REFERENCE",
-                  };
-                }
-              }
+            // A reference link is saved with the task; a file is uploaded once the task exists.
+            let attachmentPayload: { name: string; url: string } | undefined = undefined;
+            if (!task && attachType === "link") {
+              const url = (f.get("linkUrl") as string)?.trim();
+              if (url) attachmentPayload = { name: (f.get("linkName") as string)?.trim() || url, url };
             }
 
-            await request("/api/workspace", {
+            const saved = await request("/api/workspace", {
               action: task ? "update" : "create",
               task: {
                 ...(task ? { id: task.id, version: task.version } : {}),
@@ -2267,6 +2453,15 @@ function TaskEditor({
                 ...(attachmentPayload ? { attachment: attachmentPayload } : {}),
               },
             });
+            if (!task && attachType === "file" && selectedFile) {
+              try {
+                await uploadAttachment(saved.id, selectedFile, (f.get("attachmentName") as string) ?? "", "REFERENCE");
+              } catch (err) {
+                // The task exists; don't leave a form that would create it twice.
+                onSaved(`Task created, but "${selectedFile.name}" was not uploaded: ${(err as Error).message} Open the task to attach it again.`);
+                return;
+              }
+            }
             onSaved();
           } catch (e) {
             setError((e as Error).message);
@@ -2418,10 +2613,18 @@ function TaskEditor({
                   <input
                     type="file"
                     ref={fileInputRef}
+                    accept={ATTACHMENT_ACCEPT}
                     style={{ display: "none" }}
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) setSelectedFile(file);
+                      if (!file) return;
+                      if (file.size > uploadLimitMb * 1024 * 1024) {
+                        setError(`"${file.name}" is larger than ${uploadLimitMb} MB.`);
+                        e.target.value = "";
+                        return;
+                      }
+                      setError("");
+                      setSelectedFile(file);
                     }}
                   />
                   {selectedFile ? (
@@ -2448,7 +2651,7 @@ function TaskEditor({
                       <Upload size={18} style={{ margin: "0 auto 4px", display: "block", color: "#3b82f6" }} />
                       <span style={{ fontWeight: 600, color: "#1e293b" }}>Click to select reference file or document</span>
                       <span style={{ display: "block", fontSize: "0.75rem", color: "#94a3b8" }}>
-                        PDF, Word, Excel, Images, ZIP up to 50MB
+                        PDF, Office documents, images, ZIP — up to {uploadLimitMb} MB
                       </span>
                     </div>
                   )}
@@ -2502,6 +2705,7 @@ function TaskDetail({
   id,
   user,
   team,
+  uploadLimitMb,
   onClose,
   onSaved,
   notify,
@@ -2510,6 +2714,7 @@ function TaskDetail({
   id: string;
   user: User;
   team: User[];
+  uploadLimitMb: number;
   onClose: () => void;
   onSaved: () => Promise<void>;
   notify: (s: string) => void;
@@ -2592,6 +2797,7 @@ function TaskDetail({
         user={user}
         team={team}
         task={detail.task}
+        uploadLimitMb={uploadLimitMb}
         onClose={() => setEdit(false)}
         onSaved={async () => {
           setEdit(false);
@@ -2946,23 +3152,14 @@ function TaskDetail({
                       } else {
                         const file = detailFile;
                         if (!file) throw new Error("Please select a file to upload.");
-                        const name =
-                          (f.get("name") as string)?.trim() || file.name;
-                        await request("/api/workspace", {
-                          action: "attachFile",
-                          taskId: t.id,
-                          name,
-                          type: "DOCUMENT",
-                          url: "#",
-                          fileSize: file.size,
-                          purpose: f.get("purpose"),
-                        });
+                        await uploadAttachment(t.id, file, (f.get("name") as string) ?? "", String(f.get("purpose") ?? ""));
                       }
                       form.reset();
                       setDetailFile(null);
                       if (detailFileInputRef.current) detailFileInputRef.current.value = "";
                       await load();
-                      notify("Attachment added successfully.");
+                      await onSaved();
+                      notify(attachMode === "link" ? "Link attached." : "File uploaded.");
                     } catch (err) {
                       setError((err as Error).message);
                     } finally {
@@ -2988,10 +3185,18 @@ function TaskDetail({
                         <input
                           type="file"
                           ref={detailFileInputRef}
+                          accept={ATTACHMENT_ACCEPT}
                           style={{ display: "none" }}
                           onChange={(e) => {
                             const file = e.target.files?.[0];
-                            if (file) setDetailFile(file);
+                            if (!file) return;
+                            if (file.size > uploadLimitMb * 1024 * 1024) {
+                              setError(`"${file.name}" is larger than ${uploadLimitMb} MB.`);
+                              e.target.value = "";
+                              return;
+                            }
+                            setError("");
+                            setDetailFile(file);
                           }}
                         />
                         {detailFile ? (
@@ -3016,9 +3221,9 @@ function TaskDetail({
                         ) : (
                           <div style={{ color: "#64748b", fontSize: "0.86rem" }}>
                             <Upload size={22} style={{ margin: "0 auto 6px", display: "block", color: "#3b82f6" }} />
-                            <span style={{ fontWeight: 600, color: "#1e293b" }}>Click to browse or drop file here</span>
+                            <span style={{ fontWeight: 600, color: "#1e293b" }}>Click to choose a file</span>
                             <span style={{ display: "block", fontSize: "0.78rem", color: "#94a3b8", marginTop: "2px" }}>
-                              PDF, Word, Excel, Images, ZIP up to 50MB
+                              PDF, Office documents, images, ZIP — up to {uploadLimitMb} MB
                             </span>
                           </div>
                         )}
@@ -3152,22 +3357,28 @@ function TaskDetail({
                             ) : (
                               <FileText size={18} color="#059669" />
                             )}
-                            <a
-                              href={att.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                fontWeight: 600,
-                                color: "#1e293b",
-                                textDecoration: "none",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "4px",
-                              }}
-                            >
-                              <span>{att.name}</span>
-                              <ExternalLink size={13} color="#64748b" />
-                            </a>
+                            {hasStoredFile(att) ? (
+                              <a
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  fontWeight: 600,
+                                  color: "#1e293b",
+                                  textDecoration: "none",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                }}
+                              >
+                                <span>{att.name}</span>
+                                {att.type === "LINK" ? <ExternalLink size={13} color="#64748b" /> : <Download size={13} color="#64748b" />}
+                              </a>
+                            ) : (
+                              <span style={{ fontWeight: 600, color: "#64748b" }} title="Recorded before file uploads were stored; the file itself was never uploaded.">
+                                {att.name} <small style={{ fontWeight: 400 }}>(file not stored — please re-upload)</small>
+                              </span>
+                            )}
                             <span
                               style={{
                                 fontSize: "0.75rem",
@@ -3519,10 +3730,12 @@ function ResetPassword({
 }
 
 function AddEmployeeModal({
+  canCreateAdmin,
   onClose,
   onSaved,
   notify,
 }: {
+  canCreateAdmin: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
   notify: (s: string) => void;
@@ -3612,7 +3825,7 @@ function AddEmployeeModal({
               Role
               <select name="role" defaultValue="employee">
                 <option value="employee">Employee</option>
-                <option value="admin">Administrator</option>
+                {canCreateAdmin && <option value="admin">Administrator</option>}
               </select>
             </label>
           </div>
@@ -3765,7 +3978,6 @@ function MailView({
   const [loadingThread, setLoadingThread] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [replyBusy, setReplyBusy] = useState(false);
-  const [simulating, setSimulating] = useState(false);
 
   // Folder filtering
   const folderEmails = emails.filter((m) => {
@@ -3878,42 +4090,19 @@ function MailView({
     if (!selectedEmail || !replyText.trim() || replyBusy) return;
     setReplyBusy(true);
     try {
-      const res = await request("/api/workspace", {
+      const sent = await request("/api/workspace", {
         action: "replyEmail",
         emailId: selectedEmail.id,
         text: replyText.trim(),
       });
-      if (res.reply) {
-        setThreadMessages((prev) => [...prev, res.reply]);
-      }
+      setThreadMessages((prev) => [...prev, sent]);
       setReplyText("");
-      notify("Reply sent successfully.");
+      notify(deliveryMessage(sent, "Reply"));
       await onRefresh();
     } catch (err) {
       notify((err as Error).message);
     } finally {
       setReplyBusy(false);
-    }
-  };
-
-  // Helper to simulate an inbound test email for demonstration
-  const handleSimulateInbound = async () => {
-    setSimulating(true);
-    try {
-      await request("/api/workspace", {
-        action: "simulateInbound",
-        from: "partner@autoneural.in",
-        to: user.email,
-        subject: `Update regarding AutoNeural milestone (${new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })})`,
-        text: `Hello ${user.name},\n\nWe have reviewed the project documents and deliverables. Everything looks well on track. Please proceed with the next milestone!\n\nBest regards,\nAutoNeural Partner Team`,
-      });
-      await onRefresh();
-      setFolder("inbox");
-      notify("Simulated inbound email received in your inbox.");
-    } catch (err) {
-      notify((err as Error).message);
-    } finally {
-      setSimulating(false);
     }
   };
 
@@ -4056,16 +4245,6 @@ function MailView({
               <Send size={13} />
               <span>Compose Email</span>
             </button>
-            <button
-              type="button"
-              className="button secondary"
-              title="Simulate receiving an inbound domain email"
-              disabled={simulating}
-              onClick={handleSimulateInbound}
-              style={{ fontSize: "11px", padding: "7px 10px", whiteSpace: "nowrap" }}
-            >
-              {simulating ? "Receiving…" : "+ Inbound Demo"}
-            </button>
           </div>
         </div>
 
@@ -4195,7 +4374,7 @@ function MailView({
                 }}
               >
                 <span>
-                  <strong>CRM Mailbox Active:</strong> Live delivery to external Hostinger Webmail is in local simulation mode. To dispatch live external emails via Hostinger mail servers, add your Hostinger email password to <code>.env.local</code>.
+                  <strong>External email is not connected.</strong> Messages to workspace members still arrive in their inbox here; messages to outside addresses can&apos;t be sent until an administrator adds SMTP or Resend settings.
                 </span>
               </div>
             )}
@@ -4470,7 +4649,7 @@ function MailView({
                 }}
               >
                 <small style={{ fontSize: "11px", color: "var(--muted)" }}>
-                  Dispatched via domain mail server. Thread history is preserved.
+                  {emailStatus?.configured ? "Sent through your email provider. Thread history is preserved." : "Delivered inside the workspace only. Thread history is preserved."}
                 </small>
                 <button
                   type="button"
@@ -4539,7 +4718,7 @@ function ComposeEmailModal({
     setBusy(true);
     setError("");
     try {
-      await request("/api/workspace", {
+      const sent = await request("/api/workspace", {
         action: "sendUserEmail",
         to: to.trim(),
         subject: subject.trim(),
@@ -4547,7 +4726,7 @@ function ComposeEmailModal({
         taskId: taskId || undefined,
       });
       await onSent();
-      notify(`Email dispatched to ${to.trim()}`);
+      notify(deliveryMessage(sent, "Email"));
       onClose();
     } catch (err) {
       setError((err as Error).message || "Failed to dispatch email.");

@@ -11,7 +11,6 @@ import {
   approveRemoval,
   rejectRemoval,
   attachTaskLink,
-  attachTaskFile,
   approveTaskSubmission,
   rejectTaskSubmission,
   deleteTaskAttachment,
@@ -23,10 +22,10 @@ import {
   sendUserEmail,
   replyToEmail,
   markEmailSeen,
-  recordInboundEmail,
   AppError,
 } from "@/lib/store";
 import { sendTestEmail } from "@/lib/email";
+import { approvePasswordReset, cancelPendingResets, listPasswordResets, rejectPasswordReset } from "@/lib/password-reset";
 import { body, failure, requireUser, sameOrigin } from "@/lib/http";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,24 +35,25 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const id = url.searchParams.get("task");
     const threadId = url.searchParams.get("thread");
-    const mailFolder = url.searchParams.get("mailFolder") as "inbox" | "sent" | "all" | null;
+    const mailFolder = url.searchParams.get("mailFolder");
 
     if (id) {
-      return Response.json(taskDetails(u, id), { headers: { "Cache-Control": "no-store" } });
+      return Response.json(taskDetails(u, z.string().uuid("Task not found.").parse(id)), { headers: { "Cache-Control": "no-store" } });
     }
     if (threadId) {
-      return Response.json({ thread: getEmailThread(u, threadId) }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ thread: getEmailThread(u, z.string().max(200).parse(threadId)) }, { headers: { "Cache-Control": "no-store" } });
     }
     if (mailFolder) {
       return Response.json(
-        { emails: getEmailsForUser(u, mailFolder, 100), unread: unreadEmailCount(u) },
+        { emails: getEmailsForUser(u, z.enum(["inbox", "sent", "all"]).parse(mailFolder), 100), unread: unreadEmailCount(u) },
         { headers: { "Cache-Control": "no-store" } },
       );
     }
 
-    return Response.json(workspace(u), {
-      headers: { "Cache-Control": "no-store" },
-    });
+    return Response.json(
+      { ...workspace(u), passwordResets: u.role === "admin" ? listPasswordResets(u) : [] },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (e) {
     return failure(e);
   }
@@ -71,10 +71,16 @@ export async function POST(req: Request) {
       case "comment":
         addComment(u, z.string().uuid().parse(p.taskId), p.text);
         return Response.json({ ok: true });
-      case "resetPassword":
-        return Response.json({
-          password: resetPassword(u, z.string().uuid().parse(p.userId)),
-        });
+      case "resetPassword": {
+        const userId = z.string().uuid().parse(p.userId);
+        const password = resetPassword(u, userId);
+        cancelPendingResets(userId, "reset-by-admin");
+        return Response.json({ password });
+      }
+      case "approvePasswordReset":
+        return Response.json(await approvePasswordReset(u, z.string().parse(p.requestId)));
+      case "rejectPasswordReset":
+        return Response.json(rejectPasswordReset(u, z.string().parse(p.requestId)));
       case "createEmployee":
         return Response.json(createEmployee(u, p.employee), { status: 201 });
       case "requestRemoval":
@@ -85,8 +91,7 @@ export async function POST(req: Request) {
         return Response.json(rejectRemoval(u, z.string().uuid().parse(p.requestId)));
       case "attachLink":
         return Response.json(attachTaskLink(u, z.string().uuid().parse(p.taskId), p));
-      case "attachFile":
-        return Response.json(attachTaskFile(u, z.string().uuid().parse(p.taskId), p));
+      // Files are uploaded as multipart/form-data to POST /api/attachments.
       case "approveSubmission":
         return Response.json(approveTaskSubmission(u, z.string().uuid().parse(p.attachmentId), p.note));
       case "rejectSubmission":
@@ -95,11 +100,14 @@ export async function POST(req: Request) {
         return Response.json(deleteTaskAttachment(u, z.string().uuid().parse(p.attachmentId)));
       case "deleteTask":
         return Response.json(deleteTask(u, z.string().uuid().parse(p.taskId)));
-      case "testEmail":
+      case "testEmail": {
         requireAdmin(u);
         const targetEmail = z.string().trim().email().parse(p.email || u.email);
         const emailResult = await sendTestEmail(targetEmail);
+        if (!emailResult.success)
+          throw new AppError(emailResult.notConfigured ? 503 : 502, emailResult.notConfigured ? "No email provider is configured, so nothing was sent." : `The test email failed: ${emailResult.error}`);
         return Response.json(emailResult);
+      }
       case "sendUserEmail": {
         const payload = p.email || p;
         return Response.json(
@@ -120,10 +128,8 @@ export async function POST(req: Request) {
         );
       case "markEmailSeen":
         return Response.json(
-          markEmailSeen(u, z.string().parse(p.emailId), p.status || "read"),
+          markEmailSeen(u, z.string().max(64).parse(p.emailId), typeof p.seen === "boolean" ? (p.seen ? "read" : "unread") : p.status || "read"),
         );
-      case "simulateInbound":
-        return Response.json(recordInboundEmail(p), { status: 201 });
       default:
         throw new AppError(400, "Unknown action.");
     }

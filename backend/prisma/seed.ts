@@ -37,10 +37,11 @@ async function main() {
         email: 'info@autoneural.in',
       },
     },
-    update: {},
+    update: { role: Role.ADMIN, status: AccountStatus.ACTIVE, isPlatformAdmin: true },
     create: {
       organizationId: org.id,
       email: 'info@autoneural.in',
+      isPlatformAdmin: true,
       name: 'AutoNeural Admin',
       role: Role.ADMIN,
       status: AccountStatus.ACTIVE,
@@ -59,7 +60,7 @@ async function main() {
       email: 'shourya@autoneural.in',
       department: 'Engineering',
       jobTitle: 'Technical Lead',
-      role: Role.ADMIN,
+      role: Role.EMPLOYEE,
     },
   ];
 
@@ -198,7 +199,7 @@ async function main() {
   console.log('----------------------------------------------------');
   console.log('Default credentials for all accounts:');
   console.log('Password: Password123!');
-  console.log('Admins:   info@autoneural.in, shourya@autoneural.in');
+  console.log('Master admin: info@autoneural.in');
   console.log('----------------------------------------------------');
 }
 

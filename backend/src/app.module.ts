@@ -11,6 +11,8 @@ import { ActivitiesModule } from './modules/activities/activities.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { EmailModule } from './modules/email/email.module';
+import { CrmModule } from './modules/crm/crm.module';
+import { HealthController } from './modules/health/health.controller';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 
@@ -35,7 +37,9 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
     CommentsModule,
     NotificationsModule,
     EmailModule,
+    CrmModule,
   ],
+  controllers: [HealthController],
   providers: [
     {
       provide: APP_GUARD,

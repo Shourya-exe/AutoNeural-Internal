@@ -20,6 +20,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | object = 'Internal server error';
     let error = 'InternalServerError';
+    let extra: object = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -27,6 +28,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       if (typeof res === 'object' && res !== null) {
         message = (res as any).message || res;
         error = (res as any).error || exception.name;
+        extra = res; // keeps structured fields such as existingId on 409s
       } else {
         message = res;
         error = exception.name;
@@ -37,6 +39,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     const payload = {
+      ...extra,
       statusCode: status,
       timestamp: new Date().toISOString(),
       path: request.url,

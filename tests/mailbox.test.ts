@@ -23,7 +23,6 @@ process.env.CRM_DATABASE_PATH = join(dir, "mail_test.sqlite");
 setupAccounts();
 const initialUsers = allUsers();
 const admin = initialUsers.find((u) => u.email === "info@autoneural.in")!;
-const shourya = initialUsers.find((u) => u.email === "shourya@autoneural.in")!;
 
 const emp1Res = createEmployee(admin, {
   name: "Employee Alice",
@@ -48,7 +47,7 @@ after(() => {
 test("Admin sends direct domain email to employee; employee receives in Inbox as unread", async () => {
   assert.equal(unreadEmailCount(alice), 0);
 
-  const sent = await sendUserEmail(shourya, {
+  const sent = await sendUserEmail(admin, {
     to: alice.email,
     subject: "Q4 Roadmap Discussion",
     body: "Hi Alice, let's schedule our quarterly roadmap review tomorrow at 3 PM.",
@@ -56,7 +55,7 @@ test("Admin sends direct domain email to employee; employee receives in Inbox as
 
   assert.equal(sent.subject, "Q4 Roadmap Discussion");
   assert.equal(sent.direction, "OUTBOUND");
-  assert.equal(sent.senderEmail, "shourya@autoneural.in");
+  assert.equal(sent.senderEmail, "info@autoneural.in");
   assert.equal(sent.recipientEmail, "alice@autoneural.in");
 
   // Verify Alice has 1 unread email in inbox
@@ -67,10 +66,10 @@ test("Admin sends direct domain email to employee; employee receives in Inbox as
   assert.equal(aliceInbox[0].status, "unread");
   assert.equal(aliceInbox[0].direction, "INBOUND");
 
-  // Shourya sees 1 email in sent folder
-  const shouryaSent = getEmailsForUser(shourya, "sent");
-  assert.equal(shouryaSent.length, 1);
-  assert.equal(shouryaSent[0].id, sent.id);
+  // Admin sees 1 email in sent folder
+  const adminSent = getEmailsForUser(admin, "sent");
+  assert.equal(adminSent.length, 1);
+  assert.equal(adminSent[0].id, sent.id);
 });
 
 test("Employee opens and marks email as seen; unread counter drops", () => {
@@ -90,21 +89,21 @@ test("Employee replies to email; conversation threads together", async () => {
   const aliceInbox = getEmailsForUser(alice, "inbox");
   const originalMsg = aliceInbox[0];
 
-  const reply = await replyToEmail(alice, originalMsg.id, "Sounds great Shourya! I will prepare the presentation slides.");
+  const reply = await replyToEmail(alice, originalMsg.id, "Sounds great! I will prepare the presentation slides.");
 
   assert.equal(reply.direction, "OUTBOUND");
   assert.equal(reply.subject, "Re: Q4 Roadmap Discussion");
   assert.equal(reply.threadId, originalMsg.threadId);
   assert.equal(reply.inReplyTo, originalMsg.id);
 
-  // Shourya receives reply in inbox
-  const shouryaInbox = getEmailsForUser(shourya, "inbox");
-  assert.equal(shouryaInbox.length, 1);
-  assert.equal(shouryaInbox[0].subject, "Re: Q4 Roadmap Discussion");
-  assert.equal(shouryaInbox[0].senderEmail, "alice@autoneural.in");
+  // Admin receives reply in inbox
+  const adminInbox = getEmailsForUser(admin, "inbox");
+  assert.equal(adminInbox.length, 1);
+  assert.equal(adminInbox[0].subject, "Re: Q4 Roadmap Discussion");
+  assert.equal(adminInbox[0].senderEmail, "alice@autoneural.in");
 
   // Thread history contains both messages
-  const thread = getEmailThread(shourya, originalMsg.threadId);
+  const thread = getEmailThread(admin, originalMsg.threadId);
   assert.ok(thread.length >= 2);
   assert.equal(thread[0].subject, "Q4 Roadmap Discussion");
   assert.equal(thread[1].subject, "Re: Q4 Roadmap Discussion");
@@ -114,17 +113,17 @@ test("Inbound email webhook ingests external incoming messages", () => {
   const externalMsg = recordInboundEmail({
     fromEmail: "client.partner@acmecorp.com",
     fromName: "Acme Client Partner",
-    toEmail: "shourya@autoneural.in",
+    toEmail: "info@autoneural.in",
     subject: "Contract Signed & Deliverables",
-    body: "Hi Shourya, we have signed the contract. Looking forward to kick-off.",
+    body: "Hi team, we have signed the contract. Looking forward to kick-off.",
   });
 
   assert.equal(externalMsg.direction, "INBOUND");
   assert.equal(externalMsg.status, "unread");
-  assert.equal(externalMsg.recipientEmail, "shourya@autoneural.in");
+  assert.equal(externalMsg.recipientEmail, "info@autoneural.in");
 
-  const shouryaInbox = getEmailsForUser(shourya, "inbox");
-  assert.ok(shouryaInbox.some((m) => m.id === externalMsg.id));
+  const adminInbox = getEmailsForUser(admin, "inbox");
+  assert.ok(adminInbox.some((m) => m.id === externalMsg.id));
 });
 
 test("Mailbox isolation: Bob cannot view Alice's private inbox", () => {
